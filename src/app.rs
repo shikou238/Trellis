@@ -3,6 +3,7 @@ use crate::{appview::AppView, window::WindowWrapper};
 
 use std::sync::Arc;
 
+use cgmath::vec2;
 use winit::{
     application::ApplicationHandler, event::*, event_loop::{ActiveEventLoop, EventLoop}, keyboard::{KeyCode, PhysicalKey}, window::Window
 };
@@ -103,29 +104,27 @@ impl ApplicationHandler<AppView> for App {
         event: WindowEvent,
     ) {
 
-        let _canvas = match &mut self.state {
+        let appview = match &mut self.state {
             Some(canvas) => canvas,
             None => return,
         };
-        let window_wrapper = {
-            let window_wrapper = _canvas.windows.iter_mut().find(|w| w.nature.id() == window_id);
-            match window_wrapper {
-                Some(wrapper) => wrapper,
-                None => return,
-            }
+        // find window index first (immutable borrow) to avoid overlapping mutable borrows
+        let window_index = match appview.windows.iter().position(|w| w.nature.id() == window_id) {
+            Some(i) => i,
+            None => return,
         };
-        let (device, queue,render_pipeline) = (&_canvas.device, &_canvas.queue, &_canvas.render_pipeline);
+        let (device, queue,render_pipeline) = (&appview.device, &appview.queue, &appview.render_pipeline);
         match event {
             WindowEvent::CloseRequested => {
-                if _canvas.close(window_id){
+                if appview.close(window_id){
                     event_loop.exit()
                 }
                 return
             },
-            WindowEvent::Resized(size) => window_wrapper.resize(size.width, size.height, device),
-            WindowEvent::RedrawRequested => {
-                window_wrapper.render(device, queue, render_pipeline, &_canvas.model_buffer, &_canvas.diffuse_bind_group).unwrap();
-            }
+                WindowEvent::Resized(size) => {
+                    let window_wrapper = &mut appview.windows[window_index];
+                    window_wrapper.resize(size.width, size.height, device)
+                }
             WindowEvent::KeyboardInput {
                 event:
                     KeyEvent {
@@ -134,14 +133,19 @@ impl ApplicationHandler<AppView> for App {
                         ..
                     },
                 ..
-            } => match (code, key_state.is_pressed()) {
-                (KeyCode::Escape, true) => event_loop.exit(),
-                (KeyCode::KeyR, true) => {_canvas.reload();},
-                _ => {}
+            } => {
+                match (code, key_state.is_pressed()) {
+                    (KeyCode::Escape, true) => event_loop.exit(),
+                    (KeyCode::KeyR, true) => {appview.reload();},
+                        _ => {}
+                    }
+                    let window_wrapper = &mut appview.windows[window_index];
+                    window_wrapper.handle_key(event_loop, code, key_state.is_pressed());
             },
             WindowEvent::RedrawRequested => {
-                window_wrapper.update();
-                match window_wrapper.render(device, queue, render_pipeline, &_canvas.model_buffer, &_canvas.diffuse_bind_group) {
+                let window_wrapper = &mut appview.windows[window_index];
+                window_wrapper.update(queue);
+                match window_wrapper.render(device, queue, render_pipeline, &appview.model_buffer, &appview.diffuse_bind_group, &appview.model_instance_buffer,appview.model_instances.len() as u32) {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
@@ -154,6 +158,7 @@ impl ApplicationHandler<AppView> for App {
                 }
             },
             WindowEvent::CursorMoved { device_id, position } => {
+                let window_wrapper = &mut appview.windows[window_index];
                 window_wrapper.cursor_moved(position);
             }
             _ => {}

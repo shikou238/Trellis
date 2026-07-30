@@ -5,6 +5,7 @@ mod vertex;
 mod texture;
 mod shader;
 mod camera;
+mod model_instance;
 
 
 use std::sync::Arc;

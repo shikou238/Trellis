@@ -84,4 +84,5 @@ impl TextureWrapper {
             sampler: diffuse_sampler,
         }
     }
+    
 }

@@ -18,7 +18,10 @@ pub struct WindowWrapper{
     pub is_surface_configured: bool,
     pub last_cursor_position: Option<winit::dpi::PhysicalPosition<f64>>,
     pub camera: camera::Camera,
+    pub camera_buffer: wgpu::Buffer,
+    pub camera_uniform: camera::CameraUniform,
     pub camera_bind_group: wgpu::BindGroup,
+    pub camera_controller: CameraController,
 }
 
 impl WindowWrapper {
@@ -101,7 +104,10 @@ impl WindowWrapper {
             is_surface_configured: false,
             last_cursor_position: None,
             camera,
+            camera_buffer,
+            camera_uniform,
             camera_bind_group,
+            camera_controller: CameraController::new(0.2),
         }
     }
     pub fn resize(&mut self, _width: u32, _height: u32,device: &wgpu::Device) {
@@ -115,20 +121,20 @@ impl WindowWrapper {
         }
     }
     // impl State
-    pub fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
-        match (code, is_pressed) {
-            (KeyCode::Escape, true) => event_loop.exit(),
-            _ => {}
-        }
+    pub fn handle_key(&mut self, _event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+        self.camera_controller.handle_key(code, is_pressed);
     }
-    pub fn update(&mut self) {
-        // remove `todo!()`
+    pub fn update(&mut self, queue: &wgpu::Queue) {
+        log::debug!("Updating camera...");
+        self.camera_controller.update_camera(&mut self.camera);
+        self.camera_uniform.update_view_proj(&self.camera);
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
     pub fn cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
         self.last_cursor_position = Some(position);        
     }
     
-    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, render_pipeline: &wgpu::RenderPipeline, model_buffer: &vertex::ModelBuffer, diffuse_bind_group: &wgpu::BindGroup) -> Result<(), wgpu::SurfaceError>{
+    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, render_pipeline: &wgpu::RenderPipeline, model_buffer: &vertex::ModelBuffer, diffuse_bind_group: &wgpu::BindGroup,model_instance_buffer: &wgpu::Buffer,many: u32) -> Result<(), wgpu::SurfaceError>{
         self.nature.request_redraw();
 
         // We can't render unless the surface is configured
@@ -171,9 +177,10 @@ impl WindowWrapper {
             render_pass.set_pipeline(render_pipeline); // 2.
             render_pass.set_bind_group(0, diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, model_buffer.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(0, model_buffer.vertex_buffer.slice(..)); 
+            render_pass.set_vertex_buffer(1, model_instance_buffer.slice(..));
             render_pass.set_index_buffer(model_buffer.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..model_buffer.num_indices,0, 0..1); // 3.
+            render_pass.draw_indexed(0..model_buffer.num_indices,0, 0..many); // 3.
         }
 
         // submit will accept anything that implements IntoIter
@@ -205,6 +212,7 @@ impl CameraController {
     }
 
     fn handle_key(&mut self, code: KeyCode, is_pressed: bool) -> bool {
+        log::debug!("code: {:?}, is_pressed: {:?}", code, is_pressed);
         match code {
             KeyCode::KeyW | KeyCode::ArrowUp => {
                 self.is_forward_pressed = is_pressed;

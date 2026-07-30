@@ -10,7 +10,10 @@ use wgpu::util::DeviceExt;
 
 
 use crate::vertex;
-// This will store the state of our game
+use crate::model_instance::{ModelInstance, ModelInstanceRaw};
+
+use cgmath::prelude::*;
+
 pub struct AppView {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -19,6 +22,8 @@ pub struct AppView {
     pub shader: ShaderWrapper,
     pub diffuse_bind_group: wgpu::BindGroup,
     pub windows: Vec<WindowWrapper>,
+    pub model_instances: Vec<ModelInstance>,
+    pub model_instance_buffer: wgpu::Buffer,
 }
 
 impl AppView {
@@ -115,6 +120,38 @@ impl AppView {
         
         let window_wrappers = windows.into_iter().map(|window| WindowWrapper::new(window, &instance, &device,&adapter, surface_format)).collect();
         
+        const NUM_INSTANCES_PER_ROW: u32 = 10;
+        const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
+
+        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
+            (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                let position = cgmath::Vector3 { x: x as f32, y: 0.0, z: z as f32 } - INSTANCE_DISPLACEMENT;
+
+                let rotation = if position.is_zero() {
+                    // this is needed so an object at (0, 0, 0) won't get scaled to zero
+                    // as Quaternions can affect scale if they're not created correctly
+                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+                } else {
+                    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                };
+
+                ModelInstance {
+                    id: (z * NUM_INSTANCES_PER_ROW + x) as u32,
+                    texture_index: 0,
+                    position, rotation,
+                }
+            })
+        }).collect::<Vec<_>>();
+
+        let instance_data = instances.iter().map(ModelInstance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instance_data),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
         Ok(Self {
             device,
             queue,
@@ -123,6 +160,8 @@ impl AppView {
             shader,
             diffuse_bind_group,
             windows: window_wrappers,
+            model_instances: instances,
+            model_instance_buffer: instance_buffer,
         })
     }
     fn reconstruct_render_pipeline(&mut self) -> anyhow::Result<()> {
@@ -152,7 +191,7 @@ impl AppView {
             vertex: wgpu::VertexState {
                 module: &shader_wrapper.nature,
                 entry_point: Some("vs_main"), // 1.
-                buffers: &[Vertex::LAYOUT], // 2.
+                buffers: &[Vertex::LAYOUT, ModelInstanceRaw::desc()], // 2.
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState { // 3.
