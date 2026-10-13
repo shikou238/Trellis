@@ -5,12 +5,12 @@
 ;;   Backspace / X          → 1つ戻る（画面 → メニュー → 閉じる）
 ;; 保存すると自動でリロードされる（今の状態と変数は引き継ぐ）
 
-(defparam item_w 300 (Float 100 500 _))
-(defparam item_h 40 (Float 20 100 _))
-(defparam gap 6 (Float 0 40 _))
-(defparam padding 16 (Float 0 60 _))
-(defparam blink_speed 3 (Float 0 10 _))
-(defparam page_time 0.18 (Float 0 1 _))    ;; 画面が出るアニメーションの長さ（秒）
+(defparam item_w 310.136 (Float 100 500 _))
+(defparam item_h 54.997 (Float 20 100 _))
+(defparam gap 8.895 (Float 0 40 _))
+(defparam padding 31.752 (Float 0 60 _))
+(defparam blink_speed 1.945 (Float 0 10 _))
+(defparam page_time 0.246 (Float 0 1 _))    ;; 画面が出るアニメーションの長さ（秒）
 
 (var cursor 0)  ;; 選んでいる項目
 (var screen 0)  ;; 開いた画面

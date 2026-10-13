@@ -5,12 +5,12 @@
 ;;   画面で Backspace / X   → 閉じる
 ;; 保存すると自動でリロードされる（今の状態と変数は引き継ぐ）
 
-(defparam item_w 160 (Float 60 300 _))
-(defparam item_h 44 (Float 20 100 _))
-(defparam distance 90 (Float 40 300 _))    ;; 中心から項目までの距離
-(defparam tilt -6 (Float -30 30 _))
-(defparam open_time 0.12 (Float 0 1 _))    ;; メニューが出るアニメーションの長さ（秒）
-(defparam page_time 0.18 (Float 0 1 _))    ;; 画面が出るアニメーションの長さ（秒）
+(defparam item_w 190.636 (Float 60 300 _))
+(defparam item_h 52.395 (Float 20 100 _))
+(defparam distance 142.149 (Float 40 300 _))    ;; 中心から項目までの距離
+(defparam tilt -9.01 (Float -30 30 _))
+(defparam open_time 0.224 (Float 0 1 _))    ;; メニューが出るアニメーションの長さ（秒）
+(defparam page_time 0.25 (Float 0 1 _))    ;; 画面が出るアニメーションの長さ（秒）
 
 (var screen 0)  ;; 開いた画面（0:上 1:右 2:下 3:左）
 
