@@ -62,12 +62,13 @@ impl ShaderWrapper{
         })
     }
     fn load(device: &wgpu::Device,path: &str) -> anyhow::Result<wgpu::ShaderModule> {
-        let s = std::fs::read_to_string(path)?;
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(s.into()),
-        });
-        Ok(shader)
+        let s = crate::assets::read_to_string(path)?;
+        capture_validation(device, || {
+            device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("Shader"),
+                source: wgpu::ShaderSource::Wgsl(s.into()),
+            })
+        })
     }
     pub fn reload(&mut self,device: &wgpu::Device) -> anyhow::Result<()> {
         match Self::load(device, &self.path) {
@@ -82,5 +83,16 @@ impl ShaderWrapper{
     }
     pub fn get_texture_bind_group_layout(&self) -> &wgpu::BindGroupLayout {
         &self.bind_group_layouts[0]
+    }
+}
+
+/// `f` の中で起きた wgpu の検証エラー（WGSL のコンパイルエラーなど）を、パニックではなく Err で返す。
+/// ホットリロードで壊れたシェーダを読んでも落ちないようにするため
+pub fn capture_validation<T>(device: &wgpu::Device, f: impl FnOnce() -> T) -> anyhow::Result<T> {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let value = f();
+    match pollster::block_on(scope.pop()) {
+        None => Ok(value),
+        Some(error) => Err(anyhow::anyhow!("{}", error)),
     }
 }

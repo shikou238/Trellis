@@ -1,4 +1,4 @@
-use std::fs;
+use crate::assets;
 
 pub struct TextureWrapper {
     pub texture: wgpu::Texture,
@@ -11,7 +11,7 @@ impl TextureWrapper {
 
     pub fn new (path: &str, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
 
-        let diffuse_bytes = fs::read(path).expect("Failed to read texture file");
+        let diffuse_bytes = assets::read_bytes(path).expect("Failed to read texture file");
         let diffuse_image = image::load_from_memory(&diffuse_bytes).unwrap();
         let diffuse_rgba = diffuse_image.to_rgba8();
 

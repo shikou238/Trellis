@@ -144,8 +144,8 @@ impl ApplicationHandler<AppView> for App {
             },
             WindowEvent::RedrawRequested => {
                 let window_wrapper = &mut appview.windows[window_index];
-                window_wrapper.update(queue);
-                match window_wrapper.render(device, queue, render_pipeline, &appview.model_buffer, &appview.diffuse_bind_group, &appview.model_instance_buffer,appview.model_instances.len() as u32) {
+                window_wrapper.update(device, queue);
+                match window_wrapper.render(device, queue, render_pipeline, &appview.model_buffer, &appview.diffuse_bind_group, &appview.model_instance_buffer,appview.model_instances.len() as u32, &appview.ui_renderer) {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
                     Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {

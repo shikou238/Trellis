@@ -11,6 +11,8 @@ use crate::camera;
 
 use wgpu::util::DeviceExt;
 use crate::texture::TextureWrapper;
+use crate::ui::ScenePlayer;
+use crate::ui::renderer::{UiLayer, UiRenderer};
 pub struct WindowWrapper{
     pub nature: Arc<Window>,
     // todo why lifetime is needed here?
@@ -24,10 +26,14 @@ pub struct WindowWrapper{
     pub camera_bind_group: wgpu::BindGroup,
     pub camera_controller: CameraController,
     pub depth_texture: TextureWrapper,
+    pub scene: ScenePlayer,
+    pub ui_layer: UiLayer,
+    /// シーンが指定した背景色（線形 RGBA）。None ならカーソル位置の色
+    background: Option<[f32; 4]>,
 }
 
 impl WindowWrapper {
-    pub fn new(window: Arc<Window>, instance: &wgpu::Instance,device: &wgpu::Device, adapter: &wgpu::Adapter,surface_format: wgpu::TextureFormat) -> Self {
+    pub fn new(window: Arc<Window>, instance: &wgpu::Instance,device: &wgpu::Device, adapter: &wgpu::Adapter,surface_format: wgpu::TextureFormat, ui_renderer: &UiRenderer, scene_path: &str) -> Self {
         let size = window.inner_size();
 
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -112,6 +118,9 @@ impl WindowWrapper {
             camera_bind_group,
             camera_controller: CameraController::new(0.2),
             depth_texture,
+            scene: ScenePlayer::new(scene_path),
+            ui_layer: UiLayer::new(device, ui_renderer),
+            background: None,
         }
     }
     pub fn resize(&mut self, _width: u32, _height: u32,device: &wgpu::Device) {
@@ -130,17 +139,24 @@ impl WindowWrapper {
     pub fn handle_key(&mut self, _event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
         self.camera_controller.handle_key(code, is_pressed);
     }
-    pub fn update(&mut self, queue: &wgpu::Queue) {
-        log::debug!("Updating camera...");
+    pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+
+        self.scene.poll_file();
+        self.scene.advance();
+        let scale = self.nature.scale_factor() as f32;
+        let logical_size = [self.config.width as f32 / scale, self.config.height as f32 / scale];
+        self.ui_layer.instances.clear();
+        self.background = self.scene.build(logical_size, &mut self.ui_layer.instances);
+        self.ui_layer.upload(device, queue, logical_size);
     }
     pub fn cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
         self.last_cursor_position = Some(position);        
     }
     
-    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, render_pipeline: &wgpu::RenderPipeline, model_buffer: &vertex::ModelBuffer, diffuse_bind_group: &wgpu::BindGroup,model_instance_buffer: &wgpu::Buffer,many: u32) -> Result<(), wgpu::SurfaceError>{
+    pub fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, render_pipeline: &wgpu::RenderPipeline, model_buffer: &vertex::ModelBuffer, diffuse_bind_group: &wgpu::BindGroup,model_instance_buffer: &wgpu::Buffer,many: u32, ui_renderer: &UiRenderer) -> Result<(), wgpu::SurfaceError>{
         self.nature.request_redraw();
 
         // We can't render unless the surface is configured
@@ -165,10 +181,11 @@ impl WindowWrapper {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear( 
-                            match self.last_cursor_position{
-                                None => wgpu::Color{r: 0.1, g: 0.2, b: 0.3, a: 1.0},
-                                Some(winit::dpi::PhysicalPosition{x, y}) => {
+                        load: wgpu::LoadOp::Clear(
+                            match (self.background, self.last_cursor_position){
+                                (Some([r, g, b, a]), _) => wgpu::Color{r: r as f64, g: g as f64, b: b as f64, a: a as f64},
+                                (None, None) => wgpu::Color{r: 0.1, g: 0.2, b: 0.3, a: 1.0},
+                                (None, Some(winit::dpi::PhysicalPosition{x, y})) => {
                                     let size = self.nature.inner_size();
                                     hsv_to_rgb(x / size.width as f64, 0.5, y / size.height as f64)
                                 }}),
@@ -194,6 +211,9 @@ impl WindowWrapper {
             render_pass.set_vertex_buffer(1, model_instance_buffer.slice(..));
             render_pass.set_index_buffer(model_buffer.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..model_buffer.num_indices,0, 0..many); // 3.
+
+            // UI は 3D の上に重ねる
+            self.ui_layer.draw(&mut render_pass, ui_renderer);
         }
 
         // submit will accept anything that implements IntoIter

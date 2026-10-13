@@ -1,0 +1,25 @@
+;; 方式A: メニューボタンを押している間だけ出るメニュー
+;; いまは見た目だけ。入力とステートマシンは次の段階で足す
+;; 保存すると自動でリロードされる
+
+(defparam item_w 260 (Float 100 400 _))
+(defparam item_h 44 (Float 20 100 _))
+(defparam gap 10 (Float 0 40 _))
+(defparam tilt -6 (Float -30 30 _))
+(defparam pulse_speed 4 (Float 0 10 _))
+
+(def top {height / 2 - 120})
+
+(background (rgb 24 24 32))
+
+;; 下敷き
+(rect 36 {top - 24} {item_w + 48} {(item_h + gap) * 4 + 40} (rgba 0 0 0 170) (rotate tilt))
+
+;; 項目（1つ目が選択中）
+(rect 60 top item_w item_h (rgb 230 40 60) (rotate tilt))
+(rect 60 {top + (item_h + gap)} item_w item_h (rgb 240 240 240) (rotate tilt))
+(rect 60 {top + (item_h + gap) * 2} item_w item_h (rgb 240 240 240) (rotate tilt))
+(rect 60 {top + (item_h + gap) * 3} item_w item_h (rgb 240 240 240) (rotate tilt))
+
+;; カーソル（脈動）
+(rect 44 {top - 4} 10 {item_h + 8} (rgb 255 220 0) (rotate {tilt + sin(time * pulse_speed) * 4}))

@@ -1,0 +1,30 @@
+;; 方式B: メニューを開き、方向キーで選び、決定キーを押す（昔からある方式）
+;; いまは見た目だけ。入力とステートマシンは次の段階で足す
+;; 保存すると自動でリロードされる
+
+(defparam item_w 300 (Float 100 500 _))
+(defparam item_h 40 (Float 20 100 _))
+(defparam gap 6 (Float 0 40 _))
+(defparam padding 16 (Float 0 60 _))
+(defparam blink_speed 3 (Float 0 10 _))
+
+(def panel_w {item_w + padding * 2})
+(def panel_h {(item_h + gap) * 4 - gap + padding * 2})
+(def left {(width - panel_w) / 2})
+(def top {(height - panel_h) / 2})
+
+(background (rgb 16 32 48))
+
+;; ウィンドウ枠
+(rect {left - 3} {top - 3} {panel_w + 6} {panel_h + 6} (rgb 220 220 220))
+(rect left top panel_w panel_h (rgb 20 30 90))
+
+;; 選択中の項目のハイライト（点滅）
+(rect {left + padding} {top + padding} item_w item_h
+      (rgba 255 255 255 {90 + 60 * sin(time * blink_speed)}))
+
+;; 項目
+(rect {left + padding + 12} {top + padding + item_h / 2 - 4} 8 8 (rgb 255 255 255))
+(rect {left + padding + 12} {top + padding + (item_h + gap) + item_h / 2 - 4} 8 8 (rgb 160 170 200))
+(rect {left + padding + 12} {top + padding + (item_h + gap) * 2 + item_h / 2 - 4} 8 8 (rgb 160 170 200))
+(rect {left + padding + 12} {top + padding + (item_h + gap) * 3 + item_h / 2 - 4} 8 8 (rgb 160 170 200))

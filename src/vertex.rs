@@ -158,9 +158,7 @@ impl Model {
         }
 
 
-        let mut file = File::open(path)?;
-        let mut s = String::new();
-        file.read_to_string(&mut s)?;
+        let s = crate::assets::read_to_string(path).map_err(io::Error::other)?;
         let model: Model = from_str(&s).expect("parse s-expression failed");
         Ok(model)
     }

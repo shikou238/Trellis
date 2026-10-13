@@ -13,6 +13,10 @@ use crate::vertex;
 use crate::model_instance::{ModelInstance, ModelInstanceRaw};
 
 use cgmath::prelude::*;
+use crate::ui::renderer::UiRenderer;
+
+/// ウィンドウ i に読み込む UI シーン。足りなければ先頭を使う
+const SCENE_PATHS: [&str; 2] = ["ui/menu_a.ui", "ui/menu_b.ui"];
 
 pub struct AppView {
     pub device: wgpu::Device,
@@ -24,6 +28,7 @@ pub struct AppView {
     pub windows: Vec<WindowWrapper>,
     pub model_instances: Vec<ModelInstance>,
     pub model_instance_buffer: wgpu::Buffer,
+    pub ui_renderer: UiRenderer,
 }
 
 impl AppView {
@@ -118,7 +123,12 @@ impl AppView {
         );
 
         
-        let window_wrappers = windows.into_iter().map(|window| WindowWrapper::new(window, &instance, &device,&adapter, surface_format)).collect();
+        let ui_renderer = UiRenderer::new(&device, surface_format)?;
+
+        let window_wrappers = windows.into_iter().enumerate().map(|(i, window)| {
+            let scene_path = SCENE_PATHS.get(i).unwrap_or(&SCENE_PATHS[0]);
+            WindowWrapper::new(window, &instance, &device,&adapter, surface_format, &ui_renderer, scene_path)
+        }).collect();
         
         const NUM_INSTANCES_PER_ROW: u32 = 10;
         const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
@@ -162,6 +172,7 @@ impl AppView {
             windows: window_wrappers,
             model_instances: instances,
             model_instance_buffer: instance_buffer,
+            ui_renderer,
         })
     }
     fn reconstruct_render_pipeline(&mut self) -> anyhow::Result<()> {
@@ -185,7 +196,7 @@ impl AppView {
                 bind_group_layouts: &shader_wrapper.bind_group_layouts.iter().collect::<Vec<_>>(),
                 immediate_size: 0,
             });
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        crate::shader::capture_validation(device, || device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
@@ -230,8 +241,7 @@ impl AppView {
             },
             multiview_mask: None, // 5.
             cache: None, // 6.compile result
-        });
-        Ok(render_pipeline)
+        }))
     }
     fn load_model_and_create_buffer(device: &wgpu::Device) -> anyhow::Result<vertex::ModelBuffer> {
         let model = vertex::Model::load_sexpr_file("pentagon.json")?;
@@ -259,6 +269,10 @@ impl AppView {
         Self::report_err(self.shader.reload(&self.device), {|e| log::error!("Failed to reload shader: {:?}", e)});
         Self::report_err(self.reconstruct_render_pipeline(), {|e| log::error!("Failed to reload render pipeline: {:?}", e)});
         Self::report_err(self.reload_model(), {|e| log::error!("Failed to reload model: {:?}", e)});
+        Self::report_err(self.ui_renderer.reload(&self.device), {|e| log::error!("Failed to reload UI shader: {:?}", e)});
+        for window in &mut self.windows {
+            window.scene.reload();
+        }
     }
     pub fn close(&mut self, window_id: winit::window::WindowId) -> bool{
         self.windows.retain(|w| w.nature.id() != window_id);
