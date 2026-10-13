@@ -8,6 +8,17 @@ use crate::{assets, shader, texture::TextureWrapper};
 
 const SHADER_PATH: &str = "src/ui.wgsl";
 
+/// sRGB（0–1）→ 線形。サーフェスが sRGB なので、色は線形にしてから渡す
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+/// 0–255 の sRGB 色 → `RectInstance::color` 用の線形 RGBA
+pub fn srgb8(r: u8, g: u8, b: u8, a: u8) -> [f32; 4] {
+    let c = |v: u8| srgb_to_linear(v as f32 / 255.0);
+    [c(r), c(g), c(b), a as f32 / 255.0]
+}
+
 /// 1 矩形分のインスタンスデータ。座標は論理ピクセル、左上原点・y 下向き
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]

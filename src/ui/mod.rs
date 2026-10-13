@@ -1,7 +1,9 @@
 //! UI シーン（DSL）の読み込み・ホットリロード・実行。
 
+pub mod inspector;
 pub mod renderer;
 pub mod scene;
+pub mod text;
 
 use std::time::{Duration, Instant, SystemTime};
 
@@ -31,6 +33,7 @@ pub struct ScenePlayer {
     /// 次の tick で処理する入力
     pending_inputs: Vec<InputEvent>,
     env: Vec<f32>,
+    last_error: Option<String>,
 }
 
 impl ScenePlayer {
@@ -46,6 +49,7 @@ impl ScenePlayer {
             tick: 0,
             pending_inputs: Vec::new(),
             env: Vec::new(),
+            last_error: None,
         };
         player.reload();
         player
@@ -57,7 +61,9 @@ impl ScenePlayer {
         let source = match assets::read_to_string(&self.path) {
             Ok(source) => source,
             Err(e) => {
-                log::error!("{:#}", e);
+                let message = format!("{:#}", e);
+                log::error!("{}", message);
+                self.last_error = Some(message);
                 return;
             }
         };
@@ -67,10 +73,13 @@ impl ScenePlayer {
                 let previous = self.scene.as_ref().map(|old| (old, &self.runtime));
                 self.runtime = scene.adopt(previous, self.tick);
                 self.scene = Some(scene);
+                self.last_error = None;
             }
             Err(e) => {
                 let (line, col) = parser::line_col(&source, e.span.start);
-                log::error!("{}:{}:{}: {}", self.path, line, col, e.message);
+                let message = format!("{}:{}:{}: {}", self.path, line, col, e.message);
+                log::error!("{}", message);
+                self.last_error = Some(message);
             }
         }
     }
@@ -105,6 +114,45 @@ impl ScenePlayer {
                     log_step_event(path, tick, event)
                 });
             }
+        }
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn params(&self) -> &[scene::Param] {
+        self.scene.as_ref().map_or(&[], |s| &s.params)
+    }
+
+    pub fn state_name(&self) -> Option<&str> {
+        self.scene.as_ref()?.state_name(&self.runtime)
+    }
+
+    /// 直近のリロードの失敗理由。成功したら消える
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    /// メモリ上の値だけ変える（スライダーのドラッグ中）
+    pub fn set_param(&mut self, name: &str, value: f32) {
+        if let Some(param) = self.scene.as_mut().and_then(|s| s.param_mut(name)) {
+            param.value = param.snap(value);
+        }
+    }
+
+    /// ファイルに書き戻す（スライダーを離したとき）。保存を検知して自動でリロードされる
+    pub fn write_param(&mut self, name: &str, value: f32) {
+        let result = assets::read_to_string(&self.path).and_then(|source| {
+            let rewritten = Scene::rewrite_param(&source, name, value).map_err(|e| {
+                let (line, col) = parser::line_col(&source, e.span.start);
+                anyhow::anyhow!("{}:{}:{}: {}", self.path, line, col, e.message)
+            })?;
+            assets::write_string(&self.path, &rewritten)
+        });
+        match result {
+            Ok(()) => log::info!("{}: wrote {} = {}", self.path, name, value),
+            Err(e) => log::error!("could not write back {}: {:#}", name, e),
         }
     }
 

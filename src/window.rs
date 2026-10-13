@@ -14,6 +14,7 @@ use crate::texture::TextureWrapper;
 use crate::input::InputMapper;
 use crate::ui::ScenePlayer;
 use crate::ui::renderer::{UiLayer, UiRenderer};
+use crate::ui::text::{TextLayer, TextSystem};
 pub struct WindowWrapper{
     pub nature: Arc<Window>,
     // todo why lifetime is needed here?
@@ -27,15 +28,17 @@ pub struct WindowWrapper{
     pub camera_bind_group: wgpu::BindGroup,
     pub camera_controller: CameraController,
     pub depth_texture: TextureWrapper,
-    pub scene: ScenePlayer,
+    /// None のウィンドウはシーンを動かさない（インスペクタ）
+    pub scene: Option<ScenePlayer>,
     pub ui_layer: UiLayer,
+    pub text_layer: TextLayer,
     input: InputMapper,
-    /// シーンが指定した背景色（線形 RGBA）。None ならカーソル位置の色
-    background: Option<[f32; 4]>,
+    /// 背景色（線形 RGBA）。None ならカーソル位置の色
+    pub background: Option<[f32; 4]>,
 }
 
 impl WindowWrapper {
-    pub fn new(window: Arc<Window>, instance: &wgpu::Instance,device: &wgpu::Device, adapter: &wgpu::Adapter,surface_format: wgpu::TextureFormat, ui_renderer: &UiRenderer, scene_path: &str) -> Self {
+    pub fn new(window: Arc<Window>, instance: &wgpu::Instance,device: &wgpu::Device, queue: &wgpu::Queue, adapter: &wgpu::Adapter,surface_format: wgpu::TextureFormat, ui_renderer: &UiRenderer, text_system: &TextSystem, scene_path: Option<&str>) -> Self {
         let size = window.inner_size();
 
         let surface = instance.create_surface(window.clone()).unwrap();
@@ -120,8 +123,9 @@ impl WindowWrapper {
             camera_bind_group,
             camera_controller: CameraController::new(0.2),
             depth_texture,
-            scene: ScenePlayer::new(scene_path),
+            scene: scene_path.map(ScenePlayer::new),
             ui_layer: UiLayer::new(device, ui_renderer),
+            text_layer: TextLayer::new(device, queue, text_system),
             input: InputMapper::default(),
             background: None,
         }
@@ -144,26 +148,47 @@ impl WindowWrapper {
 
         let mut inputs = Vec::new();
         self.input.key(code, is_pressed, repeat, &mut inputs);
-        self.scene.queue_inputs(&inputs);
+        if let Some(scene) = &mut self.scene {
+            scene.queue_inputs(&inputs);
+        }
     }
     /// フォーカスを失うとキーの解放が届かないので、押されているものをすべて離す
     pub fn focus_lost(&mut self) {
         let mut inputs = Vec::new();
         self.input.release_all(&mut inputs);
-        self.scene.queue_inputs(&inputs);
+        if let Some(scene) = &mut self.scene {
+            scene.queue_inputs(&inputs);
+        }
     }
-    pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    pub fn scale_factor(&self) -> f32 {
+        self.nature.scale_factor() as f32
+    }
+    pub fn logical_size(&self) -> [f32; 2] {
+        let scale = self.scale_factor();
+        [self.config.width as f32 / scale, self.config.height as f32 / scale]
+    }
+    /// カーソル位置（論理ピクセル）
+    pub fn logical_cursor(&self) -> Option<[f32; 2]> {
+        let scale = self.scale_factor() as f64;
+        self.last_cursor_position.map(|p| [(p.x / scale) as f32, (p.y / scale) as f32])
+    }
+    /// シーンのあるウィンドウは、ここでシーンを進めて `ui_layer` と `text_layer` を作り直す。
+    /// シーンのないウィンドウ（インスペクタ）は、呼ぶ前に中身を詰めておく
+    pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, text_system: &mut TextSystem) {
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
-        let scale = self.nature.scale_factor() as f32;
-        let logical_size = [self.config.width as f32 / scale, self.config.height as f32 / scale];
-        self.scene.poll_file();
-        self.scene.advance(logical_size);
-        self.ui_layer.instances.clear();
-        self.background = self.scene.build(logical_size, &mut self.ui_layer.instances);
+        let logical_size = self.logical_size();
+        if let Some(scene) = &mut self.scene {
+            scene.poll_file();
+            scene.advance(logical_size);
+            self.ui_layer.instances.clear();
+            self.text_layer.labels.clear();
+            self.background = scene.build(logical_size, &mut self.ui_layer.instances);
+        }
         self.ui_layer.upload(device, queue, logical_size);
+        self.text_layer.prepare(device, queue, text_system, [self.config.width, self.config.height], self.scale_factor());
     }
     pub fn cursor_moved(&mut self, position: winit::dpi::PhysicalPosition<f64>) {
         self.last_cursor_position = Some(position);        
@@ -217,16 +242,20 @@ impl WindowWrapper {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
-            render_pass.set_pipeline(render_pipeline); // 2.
-            render_pass.set_bind_group(0, diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-            render_pass.set_vertex_buffer(0, model_buffer.vertex_buffer.slice(..)); 
-            render_pass.set_vertex_buffer(1, model_instance_buffer.slice(..));
-            render_pass.set_index_buffer(model_buffer.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..model_buffer.num_indices,0, 0..many); // 3.
+            // 3D シーンはシーンを動かすウィンドウにだけ描く（インスペクタには描かない）
+            if self.scene.is_some() {
+                render_pass.set_pipeline(render_pipeline); // 2.
+                render_pass.set_bind_group(0, diffuse_bind_group, &[]);
+                render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, model_buffer.vertex_buffer.slice(..));
+                render_pass.set_vertex_buffer(1, model_instance_buffer.slice(..));
+                render_pass.set_index_buffer(model_buffer.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                render_pass.draw_indexed(0..model_buffer.num_indices,0, 0..many); // 3.
+            }
 
-            // UI は 3D の上に重ねる
+            // UI と文字は 3D の上に重ねる
             self.ui_layer.draw(&mut render_pass, ui_renderer);
+            self.text_layer.draw(&mut render_pass);
         }
 
         // submit will accept anything that implements IntoIter

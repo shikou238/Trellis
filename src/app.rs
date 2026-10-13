@@ -51,14 +51,19 @@ impl ApplicationHandler<AppView> for App {
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
-        let mut window_attributes2 = Window::default_attributes();
-        let _window2 = Arc::new(event_loop.create_window(window_attributes2).unwrap());
-
         #[cfg(not(target_arch = "wasm32"))]
         {
+            window.set_title("方式A");
+            let window2 = Arc::new(event_loop.create_window(Window::default_attributes().with_title("方式B")).unwrap());
+            let inspector = Arc::new(event_loop.create_window(
+                Window::default_attributes()
+                    .with_title("インスペクタ")
+                    .with_inner_size(winit::dpi::LogicalSize::new(420.0, 640.0)),
+            ).unwrap());
+
             // If we are not on web we can use pollster to
-            // await the 
-            self.state = Some(pollster::block_on(AppView::new(vec![window, _window2])).unwrap());
+            // await the
+            self.state = Some(pollster::block_on(AppView::new(vec![window, window2], Some(inspector))).unwrap());
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -69,7 +74,7 @@ impl ApplicationHandler<AppView> for App {
                 wasm_bindgen_futures::spawn_local(async move {
                     assert!(proxy
                         .send_event(
-                            AppView::new(vec![window])
+                            AppView::new(vec![window], None)
                                 .await
                                 .expect("Unable to create canvas!!!")
                         )
@@ -147,8 +152,12 @@ impl ApplicationHandler<AppView> for App {
                 appview.windows[window_index].focus_lost();
             }
             WindowEvent::RedrawRequested => {
+                if appview.is_inspector(window_id) {
+                    appview.build_inspector();
+                }
+                let (device, queue, render_pipeline) = (&appview.device, &appview.queue, &appview.render_pipeline);
                 let window_wrapper = &mut appview.windows[window_index];
-                window_wrapper.update(device, queue);
+                window_wrapper.update(device, queue, &mut appview.text_system);
                 match window_wrapper.render(device, queue, render_pipeline, &appview.model_buffer, &appview.diffuse_bind_group, &appview.model_instance_buffer,appview.model_instances.len() as u32, &appview.ui_renderer) {
                     Ok(_) => {}
                     // Reconfigure the surface if it's lost or outdated
@@ -164,6 +173,12 @@ impl ApplicationHandler<AppView> for App {
             WindowEvent::CursorMoved { device_id, position } => {
                 let window_wrapper = &mut appview.windows[window_index];
                 window_wrapper.cursor_moved(position);
+                if appview.is_inspector(window_id) {
+                    appview.inspector_drag();
+                }
+            }
+            WindowEvent::MouseInput { state, button: MouseButton::Left, .. } if appview.is_inspector(window_id) => {
+                appview.inspector_mouse(state.is_pressed());
             }
             _ => {}
         }

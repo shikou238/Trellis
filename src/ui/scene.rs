@@ -25,7 +25,7 @@
 use crate::input::{Action, Edge, InputEvent};
 use crate::parser::{self, AstKind, AstNode, BinaryOp, Expr, ParseError, ParseResult, Span, UnaryOp};
 use crate::ui::TICKS_PER_SECOND;
-use crate::ui::renderer::RectInstance;
+use crate::ui::renderer::{RectInstance, srgb_to_linear};
 
 const SLOT_TIME: usize = 0;
 const SLOT_WIDTH: usize = 1;
@@ -49,6 +49,41 @@ pub struct Param {
     pub step: Option<f32>,
     /// 既定値リテラルの位置。スライダーで変えた値を書き戻すときに使う
     pub value_span: Span,
+}
+
+impl Param {
+    /// 範囲・刻み・整数に合わせる
+    pub fn snap(&self, value: f32) -> f32 {
+        let mut value = value;
+        if let Some(step) = self.step.filter(|s| *s > 0.0) {
+            let base = self.min.unwrap_or(0.0);
+            value = base + ((value - base) / step).round() * step;
+        }
+        if self.kind == ParamKind::Int {
+            value = value.round();
+        }
+        if let Some(min) = self.min {
+            value = value.max(min);
+        }
+        if let Some(max) = self.max {
+            value = value.min(max);
+        }
+        value
+    }
+
+    /// ソースに書く形の文字列。Float は刻みの桁数（なければ小数3桁まで）で、余分な 0 は省く
+    pub fn format_value(&self, value: f32) -> String {
+        if self.kind == ParamKind::Int {
+            return format!("{}", value.round() as i64);
+        }
+        let decimals = match self.step {
+            Some(step) if step > 0.0 => (-step.log10()).ceil().clamp(0.0, 6.0) as usize,
+            _ => 3,
+        };
+        let text = format!("{:.*}", decimals, value);
+        let text = if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.') } else { &text };
+        if text == "-0" { "0".to_string() } else { text.to_string() }
+    }
 }
 
 /// コンパイル済みのシーン（定義）。実行時の状態は持たない（→ `Runtime`）
@@ -227,10 +262,6 @@ impl ColorExpr {
     }
 }
 
-fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
-}
-
 fn seconds(ticks: u64) -> f32 {
     ticks as f32 / TICKS_PER_SECOND as f32
 }
@@ -323,6 +354,32 @@ impl Scene {
         }
 
         Ok(Scene { params, vars, states, defs, background, rects })
+    }
+
+    /// `source` の中のパラメータ `name` の既定値を `value` に書き換えたソースを返す。
+    /// 書き換えるのは既定値リテラルの部分だけで、コメントや書式はそのまま残る
+    pub fn rewrite_param(source: &str, name: &str, value: f32) -> ParseResult<String> {
+        let scene = Scene::compile(source)?;
+        let Some(param) = scene.params.iter().find(|p| p.name == name) else {
+            return Err(ParseError {
+                message: format!("parameter `{}` not found", name),
+                span: Span { start: 0, end: 0 },
+            });
+        };
+        let literal = param.format_value(param.snap(value));
+        let chars: Vec<char> = source.chars().collect();
+        let mut result: String = chars[..param.value_span.start].iter().collect();
+        result.push_str(&literal);
+        result.extend(&chars[param.value_span.end..]);
+        Ok(result)
+    }
+
+    pub fn state_name(&self, runtime: &Runtime) -> Option<&str> {
+        runtime.state.map(|i| self.states[i].name.as_str())
+    }
+
+    pub fn param_mut(&mut self, name: &str) -> Option<&mut Param> {
+        self.params.iter_mut().find(|p| p.name == name)
     }
 
     /// 実行時の状態を作る。前のシーンの状態があれば、同じ名前の状態・変数を引き継ぐ
@@ -794,6 +851,43 @@ mod tests {
         let text: String = source.chars().skip(span.start).take(span.end - span.start).collect();
         assert_eq!(text, "-12.5");
         assert_eq!(scene.params[0].value, -12.5);
+    }
+
+    fn param(source: &str) -> Param {
+        compile(source).params.remove(0)
+    }
+
+    #[test]
+    fn snap_respects_range_step_and_int() {
+        let p = param("(defparam p 0 (Float 10 20 0.5))");
+        assert_eq!(p.snap(12.3), 12.5);
+        assert_eq!(p.snap(99.0), 20.0);
+        assert_eq!(p.snap(-5.0), 10.0);
+        let p = param("(defparam p 0 (Int _ _ _))");
+        assert_eq!(p.snap(2.6), 3.0);
+        let p = param("(defparam p 0 (Float 1 _ 5))"); // 刻みは min を基準にする
+        assert_eq!(p.snap(7.0), 6.0);
+    }
+
+    #[test]
+    fn format_value_uses_step_precision() {
+        assert_eq!(param("(defparam p 0 (Int _ _ _))").format_value(259.6), "260");
+        assert_eq!(param("(defparam p 0 (Float _ _ 0.01))").format_value(0.123456), "0.12");
+        assert_eq!(param("(defparam p 0 (Float _ _ _))").format_value(12.5), "12.5");
+        assert_eq!(param("(defparam p 0 (Float _ _ _))").format_value(3.0), "3");
+        assert_eq!(param("(defparam p 0 (Float _ _ _))").format_value(-0.0001), "0");
+    }
+
+    #[test]
+    fn rewrite_param_replaces_only_the_literal() {
+        let source = ";; コメント\n(defparam a 1 (Float 0 10 _))  ;; 説明\n(defparam b -2 (Int -5 5 _))\n";
+        let rewritten = Scene::rewrite_param(source, "b", 3.7).unwrap();
+        assert_eq!(rewritten, ";; コメント\n(defparam a 1 (Float 0 10 _))  ;; 説明\n(defparam b 4 (Int -5 5 _))\n");
+        // 範囲外は丸めて書く
+        let rewritten = Scene::rewrite_param(source, "a", 12.25).unwrap();
+        assert!(rewritten.contains("(defparam a 10 (Float 0 10 _))"));
+        assert!(Scene::rewrite_param(source, "missing", 1.0).is_err());
+        assert!(Scene::rewrite_param("(defparam a 1 (Float))(oops", "a", 2.0).is_err());
     }
 
     const MENU: &str = "

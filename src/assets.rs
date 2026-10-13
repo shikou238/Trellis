@@ -13,6 +13,11 @@ pub fn read_bytes(path: &str) -> anyhow::Result<Vec<u8>> {
     std::fs::read(path).with_context(|| format!("failed to read {}", path))
 }
 
+/// ツールからソースへ書き戻すときに使う
+pub fn write_string(path: &str, contents: &str) -> anyhow::Result<()> {
+    std::fs::write(path, contents).with_context(|| format!("failed to write {}", path))
+}
+
 /// 更新日時。ホットリロードの変更検知に使う。取得できなければ None
 pub fn modified(path: &str) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()

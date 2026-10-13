@@ -12,8 +12,9 @@
 - **現在の目標**: UI の操作感を試作・比較するツール（PLAN.md §4）。
   現在は、**DSL で書いた UI（見た目 + ステートマシン）をウィンドウごとに動かし、キーボードで操作できる**ところまでできている。
   ウィンドウ1が方式A（押している間だけ出るメニュー）、ウィンドウ2が方式B（開いて選んで決定するメニュー）。ファイルを保存すると自動でリロードされる。
+  ウィンドウ3の**インスペクタ**で、両方のシーンの `defparam` をスライダーで調整でき、離すとソースに書き戻される。
 - チュートリアル由来の 3D シーン（テクスチャ付き五角形 ×100）は残してあり、UI はその上に重ねて描く。「ゲーム画面の上にメニューが出る」状況の背景として使える。
-- **未接続**: `src/text.rs`（glyphon による文字描画）。`lib.rs` で `// mod text;` とコメントアウトされている。
+- **古いファイル**: `src/text.rs` は古い glyphon の API で書かれた未接続のラッパー（`lib.rs` で `// mod text;`）。文字描画は `src/ui/text.rs` で作り直した。
 
 ## 2. 技術スタック
 
@@ -25,7 +26,7 @@
 | GPUへのバイト変換 | `bytemuck` | `Pod`/`Zeroable` derive |
 | 画像 | `image 0.24`（png/jpeg のみ） | |
 | モデル保存形式 | `serde` + `serde-lexpr`/`lexpr`（バージョン固定 `=`） | S式でシリアライズ |
-| テキスト | `glyphon 0.10` | 未接続。wgpu 28 を共有（Cargo.lock 上 wgpu は1バージョンのみ） |
+| 文字描画 | `glyphon 0.10`（内部で cosmic-text 0.15） | `ui/text.rs`。wgpu 28 を共有（Cargo.lock 上 wgpu は1バージョンのみ） |
 | エラー | `anyhow` | |
 | ログ | `env_logger`（native, 既定 `debug`）/ `console_log`（wasm） | |
 | 非同期の待ち | `pollster` | 起動時の adapter/device 取得と、wgpu のエラースコープの回収に使う |
@@ -42,13 +43,15 @@ src/
   app.rs             App: winit の ApplicationHandler 実装（イベント振り分け）。OS 依存の層
   appview.rs         AppView: 全ウィンドウ共有の GPU リソース
   window.rs          WindowWrapper: ウィンドウ毎のリソース + CameraController
-  assets.rs          ファイル読み込みの窓口（読み込みはすべてここを通す）
+  assets.rs          ファイル読み書きの窓口（読み込み・書き戻しはすべてここを通す）
   input.rs           入力の2層化: キー → 抽象的な操作（Action）の押下・解放（InputEvent）
   parser.rs          DSL のレキサー/パーサー（S式 + {中置式}）
   ui/
     mod.rs           ScenePlayer: シーンファイルの読込・自動リロード・固定タイムステップ・入力の受け渡し
     scene.rs         Scene: DSL → コンパイル済みシーン、ステートマシンの実行（step）、毎フレームの評価。Runtime: 実行時の状態
-    renderer.rs      UiRenderer（共有パイプライン）/ UiLayer（ウィンドウ毎のバッファ）/ RectInstance
+    renderer.rs      UiRenderer（共有パイプライン）/ UiLayer（ウィンドウ毎のバッファ）/ RectInstance / srgb8()
+    text.rs          TextSystem（共有フォント）/ TextLayer（ウィンドウ毎の文字描画）/ Label
+    inspector.rs     Inspector: パラメータのスライダーの配置・描画・ドラッグ
   ui.wgsl            UI 用 2D 矩形シェーダ（実行時にファイルから読む）
   camera.rs          Camera, CameraUniform, OPENGL_TO_WGPU_MATRIX
   model_instance.rs  ModelInstance / ModelInstanceRaw（3D のインスタンシング用）
@@ -56,7 +59,7 @@ src/
   texture.rs         TextureWrapper（画像テクスチャ, 深度テクスチャ）
   shader.rs          ShaderWrapper（3D 用 WGSL 読込・BindGroupLayout 定義・リロード）, capture_validation()
   shader.wgsl        3D 用シェーダ（実行時にファイルから読む）
-  text.rs            [未接続] glyphon テキスト描画
+  text.rs            [古い・未接続] 旧 glyphon API のラッパー。ui/text.rs に置き換え済み
   bin/parser.rs      パーサー単体の動作確認用バイナリ
 ui/
   menu_a.ui          ウィンドウ1のシーン（方式A: 押している間だけ出る十字型メニュー）
@@ -79,21 +82,26 @@ App  (ApplicationHandler<AppView>)              ← OS 依存の層
       ├─ model_buffer / diffuse_bind_group       (pentagon.json / happy-tree.png)
       ├─ model_instances + model_instance_buffer (10x10 = 100個)
       ├─ ui_renderer: UiRenderer                 (UI: パイプライン + BindGroupLayout)
+      ├─ text_system: TextSystem                 (フォント・グリフのキャッシュ。読み込みが重いので共有)
+      ├─ inspector: Inspector + inspector_window (ドラッグ中のパラメータ / インスペクタの WindowId)
       └─ windows: Vec<WindowWrapper>             ← ウィンドウ毎のリソース
            ├─ nature: Arc<winit::Window>
            ├─ surface + config + is_surface_configured + depth_texture
            ├─ camera 一式 + camera_controller
            ├─ last_cursor_position
            ├─ input: InputMapper                 (押されているキー → 操作の押下・解放)
-           ├─ scene: ScenePlayer                 (シーン定義 Scene + 実行時状態 tick / Runtime + 入力の待ち行列)
+           ├─ scene: Option<ScenePlayer>         (シーン定義 Scene + 実行時状態 tick / Runtime + 入力の待ち行列)
+           │                                      None = シーンを動かさないウィンドウ（インスペクタ）
            ├─ ui_layer: UiLayer                  (画面サイズ uniform + 矩形インスタンスバッファ)
-           └─ background                         (シーンが指定した背景色)
+           ├─ text_layer: TextLayer              (文字のアトラス・描画パイプライン + 今フレームの Label 列)
+           └─ background                         (背景色)
 ```
 
 **設計意図**: チュートリアルの `State` を2つに分けている。
-- **共有すべきもの**（device・パイプライン・メッシュ・テクスチャ）は `AppView` に1つ。
-- **ウィンドウ固有のもの**（surface・深度バッファ・カメラ・入力状態・UI シーン）は `WindowWrapper` に。
-  ネイティブでは起動時に2ウィンドウを作り（`App::resumed`）、それぞれ別のシーンファイルを読む（`appview.rs` の `SCENE_PATHS`）。
+- **共有すべきもの**（device・パイプライン・メッシュ・テクスチャ・フォント）は `AppView` に1つ。
+- **ウィンドウ固有のもの**（surface・深度バッファ・カメラ・入力状態・UI シーン・文字のアトラス）は `WindowWrapper` に。
+  ネイティブでは起動時に3ウィンドウを作り（`App::resumed`）、1・2 番目はそれぞれ別のシーンファイルを読む（`appview.rs` の `SCENE_PATHS`）。3 番目はインスペクタ。
+- **ウィンドウをまたぐ処理**（インスペクタが他のウィンドウのシーンを読み書きする）は `AppView` のメソッドに置く。ウィンドウの指定は `windows` のインデックスではなく `WindowId` で行う（ウィンドウを閉じると `windows` の並びがずれるため）。
 
 命名規約: wgpu/winit の生オブジェクトをラップした構造体は `XxxWrapper`、ラップ対象のフィールド名は **`nature`**。
 
@@ -106,9 +114,9 @@ main() → lib::run()
   └─ run_app(App)
        resumed()
          ├─ (wasm) <canvas id="canvas"> を取得して window に割当
-         ├─ window1, window2 を作成
-         ├─ native: pollster::block_on(AppView::new(vec![w1, w2]))
-         └─ wasm  : spawn_local で AppView::new(vec![w1]) → proxy.send_event(AppView)
+         ├─ native: 「方式A」「方式B」「インスペクタ」の3ウィンドウを作成
+         │          pollster::block_on(AppView::new(vec![w1, w2], Some(inspector)))
+         └─ wasm  : spawn_local で AppView::new(vec![w1], None) → proxy.send_event(AppView)
                      → user_event() で受け取り state にセット + 初回 resize
 ```
 
@@ -120,8 +128,8 @@ wasm では async を block できないので、生成した `AppView` 自体�
 3. device/queue 取得（wasm は `downlevel_webgl2_defaults`）
 4. `ShaderWrapper::new` → `constuct_render_pipeline`（3D）
 5. `pentagon.json` → `ModelBuffer`、`happy-tree.png` → `diffuse_bind_group`
-6. `UiRenderer::new`（UI パイプライン）
-7. 各 window から `WindowWrapper::new`（surface/カメラ/深度/`ScenePlayer`/`UiLayer` を作成。surface はこの時点では未configure）
+6. `UiRenderer::new`（UI パイプライン）、`TextSystem::new`（フォント読み込み）
+7. 各 window から `WindowWrapper::new`（surface/カメラ/深度/`ScenePlayer`/`UiLayer`/`TextLayer` を作成。インスペクタは `ScenePlayer` なし。surface はこの時点では未configure）
 8. 10×10 グリッドのインスタンス生成 → インスタンスバッファ
 
 ### 4.3 イベント処理（`App::window_event`）
@@ -130,12 +138,13 @@ wasm では async を block できないので、生成した `AppView` 自体�
 
 | イベント | 処理 |
 |---|---|
-| `CloseRequested` | そのウィンドウを `windows` から除去。空になったらアプリ終了 |
+| `CloseRequested` | そのウィンドウを `windows` から除去。シーンを動かすウィンドウが残っていなければアプリ終了 |
 | `Resized` | surface 再configure + 深度テクスチャ再生成。**ここで初めて `is_surface_configured = true`** |
 | `KeyboardInput` | `Esc`=終了、`R`=ホットリロード（全体）。その後そのウィンドウの `handle_key` へ（CameraController と InputMapper の両方に渡す。OS のキーリピートかどうかも渡す） |
 | `Focused(false)` | `focus_lost`: 押されたままのキーをすべて離したことにする（解放が届かず押しっぱなしになるのを防ぐ） |
-| `RedrawRequested` | `WindowWrapper::update()` → `render()`。Lost/Outdated なら resize で復旧 |
-| `CursorMoved` | カーソル位置を保持（背景色に使用） |
+| `RedrawRequested` | （インスペクタなら先に `AppView::build_inspector`）→ `WindowWrapper::update()` → `render()`。Lost/Outdated なら resize で復旧 |
+| `CursorMoved` | カーソル位置を保持（背景色に使用）。インスペクタなら `AppView::inspector_drag`（ドラッグ中の値を更新） |
+| `MouseInput`（左ボタン, インスペクタのみ） | `AppView::inspector_mouse`: 押したらドラッグ開始、離したらソースに書き戻す |
 
 キー入力はフォーカスのあるウィンドウにだけ届くので、2つの方式は**ウィンドウごとに独立して**動く。
 
@@ -146,17 +155,24 @@ wasm では async を block できないので、生成した `AppView` 自体�
 ```
 (イベント) handle_key → input.key() → scene.queue_inputs()   … 操作の押下・解放を待ち行列に積む
 
-update(device, queue)
+(インスペクタのみ) AppView::build_inspector()
+  └─ 全シーンの SceneSummary を集め、Inspector::build で矩形と Label を作って
+     インスペクタの ui_layer.instances / text_layer.labels に入れる
+
+update(device, queue, text_system)
   ├─ カメラ更新 → camera_buffer に書き込み
-  ├─ scene.poll_file()      … 200ms ごとにファイルの更新日時を確認し、変わっていればリロード
-  ├─ scene.advance(size)    … 経過した実時間ぶん tick を進める（1/60 秒の固定ステップ）。
-  │                            tick ごとに Scene::step（待ち行列の入力は最初の tick でまとめて処理）
-  ├─ scene.build(...)       … シーンを評価して RectInstance の列と背景色を作る
-  └─ ui_layer.upload(...)   … 画面サイズ（論理ピクセル）とインスタンスを GPU に送る
+  ├─ (シーンがあれば)
+  │   ├─ scene.poll_file()    … 200ms ごとにファイルの更新日時を確認し、変わっていればリロード
+  │   ├─ scene.advance(size)  … 経過した実時間ぶん tick を進める（1/60 秒の固定ステップ）。
+  │   │                          tick ごとに Scene::step（待ち行列の入力は最初の tick でまとめて処理）
+  │   └─ scene.build(...)     … シーンを評価して RectInstance の列と背景色を作る
+  ├─ ui_layer.upload(...)     … 画面サイズ（論理ピクセル）とインスタンスを GPU に送る
+  └─ text_layer.prepare(...)  … Label をシェイピング（文字列が変わったものだけ）してアトラスに載せる
 render(...)
-  ├─ クリア（シーンの background があればその色、なければカーソル位置の HSV）
-  ├─ 3D: 五角形 ×100 を描画
-  └─ UI: ui_layer.draw()     … 同じレンダーパスで 3D の上に重ねる
+  ├─ クリア（background があればその色、なければカーソル位置の HSV）
+  ├─ 3D: 五角形 ×100 を描画（シーンのあるウィンドウだけ）
+  ├─ UI: ui_layer.draw()      … 同じレンダーパスで 3D の上に重ねる
+  └─ 文字: text_layer.draw()  … さらにその上
 ```
 
 ### 4.5 3D 描画パイプライン（チュートリアル由来）
@@ -177,7 +193,7 @@ render(...)
 
 - location 3,4 は将来の頂点属性（法線等）用に空けてある。
 - `model_id` / `texture_id` はシェーダに渡しているが**未使用**（将来のテクスチャ配列などのため）。
-- カメラ: eye=(0,1,2) から原点を見る透視投影。`CameraController` は WASD/矢印で前後移動と周回。
+- カメラ: eye=(0,1,2) から原点を見る透視投影。`CameraController` は WASD で前後移動と周回（矢印キーは UI 用）。
 
 ### 4.6 UI 描画パイプライン（`ui/renderer.rs`, `ui.wgsl`）
 
@@ -196,14 +212,26 @@ render(...)
 | 0 | Instance | `RectInstance` (36B) | 0: position（左上）`vec2`, 1: size `vec2`, 2: color（線形 RGBA）`vec4`, 3: rotation（ラジアン、中心まわり）`f32` |
 
 インスタンスバッファは足りなくなったら2のべき乗の容量で作り直す（`UiLayer::upload`）。
+Rust 側で色を作るときは `renderer::srgb8(r, g, b, a)`（0–255 の sRGB → 線形）を使う。
+
+### 4.7 文字描画（`ui/text.rs`）
+
+- glyphon を使う。**フォント（`FontSystem`）・`SwashCache`・`Cache` は全ウィンドウで共有**（`TextSystem` → AppView）。`FontSystem::new()` はシステムフォントを読むので重い。
+- **アトラス・`TextRenderer`・`Viewport` はウィンドウ毎**（`TextLayer` → WindowWrapper）。
+- 使い方: 毎フレーム `text_layer.labels` に `Label { text, position, size, color }` を詰め直す → `update` 内の `prepare` → `render` 内の `draw`。
+  - 位置とサイズは**論理ピクセル**。glyphon には物理ピクセルで渡す（`TextArea` の `left/top` に scale_factor を掛け、`scale` に scale_factor を入れる）。
+  - 色は sRGB 0–255。
+  - 前フレームと同じ文字列・サイズの Label は、シェイピングし直さない（`TextLayer::shaped` にキャッシュ）。Label の並び順が変わるとキャッシュが効かない。
+- UI と同じく、レンダーパスの深度アタッチメントに合わせて `depth_compare: Always` / 書き込みなしのパイプラインにしている。
+- 現在の用途はインスペクタだけ（シーンの DSL から文字を出す機能はまだない）。
 
 ## 5. 外部データとホットリロード
 
-### 5.1 実行時に読むファイル（すべて**カレントディレクトリ相対**、読み込みは `assets.rs` 経由）
+### 5.1 実行時に読むファイル（すべて**カレントディレクトリ相対**、読み書きは `assets.rs` 経由）
 
 | パス | 読む場所 | 用途 | リロード |
 |---|---|---|---|
-| `ui/menu_a.ui`, `ui/menu_b.ui` | `ScenePlayer::reload` | UI シーン | **保存で自動** + `R` |
+| `ui/menu_a.ui`, `ui/menu_b.ui` | `ScenePlayer::reload` | UI シーン。**インスペクタから書き戻される**（`ScenePlayer::write_param`） | **保存で自動** + `R` |
 | `src/ui.wgsl` | `UiRenderer::build_pipeline` | UI シェーダ | `R` |
 | `src/shader.wgsl` | `ShaderWrapper::load` | 3D シェーダ | `R` |
 | `pentagon.json` | `AppView::load_model_and_create_buffer` | 3D モデル | `R` |
@@ -214,6 +242,7 @@ render(...)
 ### 5.2 失敗しても落ちない仕組み
 
 - **シーンファイル**: パースやコンパイルに失敗したら `log::error!` に `パス:行:列: メッセージ` を出し、**直前の正常なシーンのまま動き続ける**。ファイルが読めない場合も同じ。
+  エラーは `ScenePlayer::last_error` にも残り、**インスペクタに赤字で表示**される（次に読み込みが成功すると消える）。
 - **シェーダとパイプライン**: `shader::capture_validation()` が wgpu のエラースコープで検証エラーを捕まえ、パニックではなく `Err` にする。失敗したら差し替えない。
   - 3D: `ShaderWrapper::load` と `constuct_render_pipeline` の両方を包んでいる。
   - UI: `UiRenderer::build_pipeline` 全体を包んでいる。
@@ -226,7 +255,27 @@ render(...)
 - リロードでは `Scene::adopt` が、**同じ名前の状態と変数を引き継いだ** `Runtime` を作る。今の状態がファイルから消えていたら初期状態から始める。新しい変数は初期値になる。
 - `time` は続きから進む。`time` は `tick / 60` で求める。tick は `ScenePlayer::advance` が実時間を積算して進める（最大 250ms 分まで。処理落ちで固まらないため）。
 
-### 5.4 3D モデルファイル形式
+### 5.4 インスペクタとソースへの書き戻し（`ui/inspector.rs`, `Scene::rewrite_param`）
+
+```
+左ボタンを押す   Inspector::press      … カーソルの下の行のパラメータでドラッグ開始
+                                         （範囲のあるスライダーは押した位置の値にすぐ合わせる）
+カーソル移動     Inspector::value_at   → ScenePlayer::set_param   … メモリ上の値だけ変える（即座に画面に反映）
+左ボタンを離す   Inspector::release    → ScenePlayer::write_param … ファイルに書き戻す
+                                         → 保存を検知して自動リロード（状態は引き継ぐ）
+```
+
+- **値の決め方**（`Inspector::value_at`）:
+  - 範囲（min と max）があれば、トラック上のカーソル位置 → 値。
+  - なければ、ドラッグ開始位置からの移動量 × 1 ピクセルあたりの変化量（`step` があればその値、`Int` は 0.25、`Float` は開始時の値の大きさ / 200）。
+  - 最後に `Param::snap` で、`step`（`min` を基準）・整数・範囲に合わせる。
+- **書き戻し**（`Scene::rewrite_param`）: 書き戻すたびに**ファイルを読み直してコンパイルし、名前でパラメータを探して**、既定値リテラルの `value_span` の部分だけを `Param::format_value` の文字列に置き換える。コメントや書式はそのまま残る。
+  ファイルがコンパイルできない（編集途中など）・パラメータが見つからない場合は書き込まずにエラーをログに出す。
+- **書式**（`Param::format_value`）: `Int` は整数、`Float` は `step` の桁数（なければ小数3桁まで）で、末尾の 0 は省く。
+- **配置**（`inspector::layout`）: シーンごとに「見出し（パス + 今の状態名）→（エラーがあれば赤字）→ パラメータの行…」を上から並べる。描画と当たり判定で同じ配置を使う。
+- インスペクタはシーンを持たないウィンドウ。中身は `AppView::build_inspector` が毎フレーム作り直す。
+
+### 5.5 3D モデルファイル形式
 
 `Model { vertices: Vec<Vertex>, indices: Vec<u16> }` を serde でシリアライズ。
 - **S式（採用中）**: `save_sexpr_file` / `load_sexpr_file`。`pentagon.json` は拡張子が json だが中身は S式。
@@ -308,28 +357,24 @@ render(...)
 
 **StepEvent**: `step` は起きたこと（遷移・goto のない遷移・無視された入力）を `StepEvent` としてコールバックに渡す。いまは `ScenePlayer` が tick 番号つきで `log::info!` に出しているだけ。操作ログ（PLAN.md §4.5）はここに記録処理を足して作る。
 
-**Param は書き戻しの準備ができている**: `Param` は型・最小・最大・刻みと、既定値リテラルの位置（`value_span`）を持つ。スライダー化とソースへの書き戻しにはまだ使っていない。
+**Param**: 型・最小・最大・刻みと、既定値リテラルの位置（`value_span`）を持つ。インスペクタのスライダーとソースへの書き戻しに使う（§5.4）。値は `Scene` の中にあり、ドラッグ中は `ScenePlayer::set_param` が直接書き換える（リロードするとファイルの値に戻る）。
 
 ### 6.4 パーサー単体の確認
 
 `cargo run --bin parser [ファイル]` で AST を表示する。引数なしでは、当初の構想を書いたサンプル（`paint`, `defvar`, 行列リテラルなど）をパースする。
 このサンプルは `()` と `((1 2 0) ...)`（head がシンボルでないリスト）の行で `expected symbol` エラーになる（未対応の構文）。
 
-## 7. 未接続: テキスト描画（`src/text.rs`）
+## 7. 古いファイル: `src/text.rs`
 
-`GlyphonText`: glyphon の FontSystem/SwashCache/TextAtlas/TextRenderer/Buffer をまとめたラッパー。
-- 32px / 行間42px、左上 (24,24) マージン、白文字、SansSerif、日本語サンプル文。
-- API: `new(device, queue, format, w, h)` / `set_text` / `resize` / `prepare(device, queue, w, h)` / `render(&mut RenderPass)`。
-- 統合するなら WindowWrapper ごとに持ち、`render()` 内で描画前に `prepare`、同じレンダーパスの最後に `render` を呼ぶ形が自然。
-  ただしレンダーパスは深度アタッチメント付きなので、`TextRenderer::new` の depth_stencil 引数（現在 `None`）を合わせる必要がある。
-- 最初の用途の候補: シーンのエラーを画面に表示する（PLAN.md §3.4）。
+`GlyphonText`: 古い glyphon の API（`TextAtlas::new(device, queue, format)`, `Resolution` を `prepare` に渡す形）で書かれたラッパー。glyphon 0.10 ではそのままではコンパイルできないため、`lib.rs` で `// mod text;` のまま未接続。
+文字描画は `src/ui/text.rs`（§4.7）で作り直した。日本語サンプル文の表示など、元の意図は `ui/text.rs` の `Label` で実現できる。不要なら削除してよい。
 
 ## 8. ビルド / 実行 / テスト
 
 ```bash
 cargo run                  # ネイティブ。リポジトリ直下で実行すること（相対パス読込のため）
 cargo run --bin parser     # DSL パーサー単体（AST を Debug 出力）
-cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.ui を読み込んで操作の流れを試すテストを含む）
+cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.ui を読み込んで操作の流れを試すテスト、書き戻しのテストを含む）
 ```
 
 **キー配置**（`input.rs` の `action_for_key`）:
@@ -355,6 +400,9 @@ cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.u
 画面は4色（赤・青・緑・黄）で区別し、両方式で同じ遷移アニメーション（`page_time`）にしてある。
 `ui/*.ui` は保存するだけで反映される。マウス移動で背景色が変わるのは、シーンが `background` を指定していないときだけ。
 
+**インスペクタ**（ウィンドウ3）: 両シーンの `defparam` がスライダーとして並ぶ。左ボタンでドラッグすると即座に反映され、離すと `.ui` ファイルに書き戻される。
+範囲のあるパラメータはつまみの位置が値、範囲のないものは左右のドラッグ量で増減する。見出しには今の状態名、シーンにエラーがあれば赤字でエラーが出る。
+
 ## 9. 既知の問題・設計上の注意点
 
 **意図的なのか未着手なのか**も併記。
@@ -376,22 +424,30 @@ cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.u
 | 13 | `R` キーで壊れた WGSL を読んだときに落ちないことは、コード上は対処済みだが手動では未確認 | `shader::capture_validation` | 要確認 |
 | 14 | `TextureWrapper::new` は失敗時に `expect`/`unwrap` でパニック（他は anyhow） | `texture.rs` | エラー処理が不統一 |
 | 15 | `constuct_render_pipeline` は綴り誤り（construct）。呼び出し側も同名 | `appview.rs` | 命名 |
-| 16 | 未使用 import が多い（`wgpu::wgc::device` など）。`Param` の `kind`/`min`/`max`/`step`/`value_span` は次の段階（スライダー）まで未使用 | 各所 | 警告のみ |
+| 16 | 未使用 import が多い（`wgpu::wgc::device` など） | 各所 | 警告のみ |
+| 17 | `step` のない Float パラメータは、スライダーで書き戻すと小数3桁の値になる（例: `310.136`）。きりのいい値にしたいときは `step` を指定する | `Param::format_value` | 意図的（必要な精度はパラメータごとに違う） |
+| 18 | 書き戻しはファイルを外から書き換えるので、エディタで開いていると「外部で変更された」扱いになる。エディタ側で未保存の編集があると衝突する | `ScenePlayer::write_param` | 注意 |
+| 19 | インスペクタはスクロールできない。パラメータが多いとウィンドウからはみ出す | `ui/inspector.rs` | 必要になったら対応 |
+| 20 | インスペクタの当たり判定・ドラッグにはテストがない（`WindowId` をテストで作りにくいため）。書き戻し・丸め・書式は `Scene` / `Param` のテストで確認している | `ui/inspector.rs` | 未対応 |
+| 21 | 範囲のないパラメータの、1 ピクセルあたりの変化量（`Int` 0.25 / `Float` 値の 1/200）は仮の値 | `Inspector::value_at` | 触って調整する |
 
 ## 10. 次の段階（PLAN.md §4.6）
 
-1. **パラメータのスライダー化とソースへの書き戻し**: `Param` の範囲と `value_span` を使う。ツール自体の UI（スライダー）を自作するか egui などを借りるかは未決定（PLAN.md §7）。
-2. **操作ログ**: `StepEvent` を tick つきで記録し、方式ごとに集計する（操作完了までの時間、手数、無視された入力、待たされた時間など。PLAN.md §4.5）。操作の目的（「青の画面を開く」など）を与える仕組みも要る。
-3. 必要になったら: 記録した入力の再生、ログのタイムライン表示、文字の描画（`text.rs`）、シーン間で共通部分を共有する仕組み。
+1. **操作ログ**: `StepEvent` を tick つきで記録し、方式ごとに集計する（操作完了までの時間、手数、無視された入力、待たされた時間など。PLAN.md §4.5）。操作の目的（「青の画面を開く」など）を与える仕組みも要る。集計結果はインスペクタに文字で出せる。
+2. 必要になったら: 記録した入力の再生、ログのタイムライン表示、シーンの DSL から文字を出す機能（`(text ...)`）、シーン間で共通部分を共有する仕組み、インスペクタのスクロール。
+
+ツール自体の UI は**自作する**と決めた（PLAN.md §7 の未決定事項のうち1つ。インスペクタは別ウィンドウ）。
 
 ## 11. Claude 向け作業メモ
 
 - コード変更前に「共有リソースか（→`AppView`）／ウィンドウ固有か（→`WindowWrapper`）」を判断して置き場所を決める。
-- ファイルを読むときは `assets.rs` を通す。新しい外部ファイルはホットリロードに乗せるかを検討し、乗せるなら失敗しても落ちない形にする（シーンは `ScenePlayer` 方式、GPU 資源は `capture_validation` で包んで成功時だけ差し替え）。
+- ファイルを読み書きするときは `assets.rs` を通す。新しい外部ファイルはホットリロードに乗せるかを検討し、乗せるなら失敗しても落ちない形にする（シーンは `ScenePlayer` 方式、GPU 資源は `capture_validation` で包んで成功時だけ差し替え）。
 - 新しい GPU 用構造体は `#[repr(C)]` + `bytemuck::Pod/Zeroable`。シェーダの `@location` / `@group` と必ず同期させる（3D は `Vertex::LAYOUT` / `ModelInstanceRaw::desc()`、UI は `RectInstance::LAYOUT`）。
 - 3D の bind group を追加したら `ShaderWrapper::bind_group_layouts`（index = group 番号）に追加する。UI 側は `UiRenderer` が自前でレイアウトを持つ。
 - DSL に新しいフォームや関数を足すときは、`ui/scene.rs` の `Scene::compile` / `Compiler` / `Func::lookup` を更新し、テストを足す。名前はコンパイル時にスロットへ解決し、毎フレーム名前で検索しない。スロットの並びを変えたら `Scene` のコメントと §6.3 も直す。
 - シーンはキーを直接見ない。新しい入力（キー、パッド、タッチ）は `input.rs` で `Action` に変換して渡す。操作を増やすときは `Action` と `action_for_key` を更新する。
 - 実行時の状態は `Runtime` に置き、`Scene` には置かない（リロードで消えないように）。状態を足したら `Scene::adopt` で引き継ぎ方を決める。
 - `ui/*.ui` を変えたら `cargo test --lib` を回す（同梱のシーンを読み込むテストがある）。
+- ウィンドウをまたぐ処理（あるウィンドウの操作で別のウィンドウのシーンを変える）は `AppView` に置き、相手は `WindowId` で指定する。
+- Rust 側で UI を描くときは、矩形は `RectInstance`（色は `srgb8`）、文字は `Label` を `ui_layer.instances` / `text_layer.labels` に詰める（インスペクタが例）。
 - コメントは日本語と英語が混在（チュートリアル由来の英語コメントはそのまま残っている）。
