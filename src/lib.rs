@@ -9,6 +9,7 @@ mod model_instance;
 // mod text;
 pub mod parser;
 mod assets;
+mod input;
 mod ui;
 
 use std::sync::Arc;

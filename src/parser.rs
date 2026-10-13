@@ -14,6 +14,12 @@ enum TokenKind {
     Slash, // `/`
     Bang, // `!`
     Comma, // `,`
+    EqEq, // `==`
+    NotEq, // `!=`
+    Less, // `<`
+    LessEq, // `<=`
+    Greater, // `>`
+    GreaterEq, // `>=`
 
     Integer(i64),
     Float(f64),
@@ -108,6 +114,14 @@ pub enum UnaryOp {
 
 #[derive(Debug, Clone, Copy)]
 pub enum BinaryOp {
+    // 比較（結果は 1 か 0）。+ - より弱く結合する
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+
     Add,
     Sub,
     Mul,
@@ -182,7 +196,20 @@ impl<'a> Lexer<'a> {
                 }
                 '!' => {
                     self.advance();
-                    TokenKind::Bang
+                    if self.eat('=') { TokenKind::NotEq } else { TokenKind::Bang }
+                }
+                '=' if self.peek_next() == Some('=') => {
+                    self.advance();
+                    self.advance();
+                    TokenKind::EqEq
+                }
+                '<' => {
+                    self.advance();
+                    if self.eat('=') { TokenKind::LessEq } else { TokenKind::Less }
+                }
+                '>' => {
+                    self.advance();
+                    if self.eat('=') { TokenKind::GreaterEq } else { TokenKind::Greater }
                 }
                 ',' => {
                     self.advance();
@@ -221,6 +248,16 @@ impl<'a> Lexer<'a> {
 
     fn peek(&self) -> Option<char> {
         self.chars.get(self.pos).copied()
+    }
+
+    /// 次の文字が `expected` なら読み進めて true
+    fn eat(&mut self, expected: char) -> bool {
+        if self.peek() == Some(expected) {
+            self.advance();
+            true
+        } else {
+            false
+        }
     }
 
     fn peek_next(&self) -> Option<char> {
@@ -572,10 +609,16 @@ impl Parser {
 
     fn current_binary_op(&self) -> Option<(BinaryOp, u8, u8)> {
         match self.current().kind {
-            TokenKind::Plus => Some((BinaryOp::Add, 1, 2)),
-            TokenKind::Minus => Some((BinaryOp::Sub, 1, 2)),
-            TokenKind::Star => Some((BinaryOp::Mul, 3, 4)),
-            TokenKind::Slash => Some((BinaryOp::Div, 3, 4)),
+            TokenKind::EqEq => Some((BinaryOp::Eq, 1, 2)),
+            TokenKind::NotEq => Some((BinaryOp::Ne, 1, 2)),
+            TokenKind::Less => Some((BinaryOp::Lt, 1, 2)),
+            TokenKind::LessEq => Some((BinaryOp::Le, 1, 2)),
+            TokenKind::Greater => Some((BinaryOp::Gt, 1, 2)),
+            TokenKind::GreaterEq => Some((BinaryOp::Ge, 1, 2)),
+            TokenKind::Plus => Some((BinaryOp::Add, 3, 4)),
+            TokenKind::Minus => Some((BinaryOp::Sub, 3, 4)),
+            TokenKind::Star => Some((BinaryOp::Mul, 5, 6)),
+            TokenKind::Slash => Some((BinaryOp::Div, 5, 6)),
             _ => None,
         }
     }

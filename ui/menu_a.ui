@@ -1,25 +1,50 @@
-;; 方式A: メニューボタンを押している間だけ出るメニュー
-;; いまは見た目だけ。入力とステートマシンは次の段階で足す
-;; 保存すると自動でリロードされる
+;; 方式A: メニューボタンを押している間だけメニューが出る
+;;   Space を押したまま     → メニューが出る
+;;   押したまま矢印キー     → その方向の画面へ（上・右・下・左）
+;;   Space を離す           → 閉じる
+;;   画面で Backspace / X   → 閉じる
+;; 保存すると自動でリロードされる（今の状態と変数は引き継ぐ）
 
-(defparam item_w 260 (Float 100 400 _))
+(defparam item_w 160 (Float 60 300 _))
 (defparam item_h 44 (Float 20 100 _))
-(defparam gap 10 (Float 0 40 _))
+(defparam distance 90 (Float 40 300 _))    ;; 中心から項目までの距離
 (defparam tilt -6 (Float -30 30 _))
-(defparam pulse_speed 4 (Float 0 10 _))
+(defparam open_time 0.12 (Float 0 1 _))    ;; メニューが出るアニメーションの長さ（秒）
+(defparam page_time 0.18 (Float 0 1 _))    ;; 画面が出るアニメーションの長さ（秒）
 
-(def top {height / 2 - 120})
+(var screen 0)  ;; 開いた画面（0:上 1:右 2:下 3:左）
+
+(state closed
+  (on (press menu) (goto open)))
+(state open
+  (on (release menu) (goto closed))
+  (on (press up) (set screen 0) (goto page))
+  (on (press right) (set screen 1) (goto page))
+  (on (press down) (set screen 2) (goto page))
+  (on (press left) (set screen 3) (goto page)))
+(state page
+  (on (press cancel) (goto closed)))
+
+(def cx {width / 2})
+(def cy {height / 2})
+(def appear {smoothstep(0, open_time, state_time)})   ;; 0 → 1
+(def dy {distance * appear})
+(def dx {(distance + item_w / 2) * appear})
+(def page_in {smoothstep(0, page_time, state_time)})
+(def page_x {lerp(width, 60, page_in)})
 
 (background (rgb 24 24 32))
 
-;; 下敷き
-(rect 36 {top - 24} {item_w + 48} {(item_h + gap) * 4 + 40} (rgba 0 0 0 170) (rotate tilt))
+;; メニュー: 中心と上・右・下・左の項目
+(rect {cx - 14} {cy - 14} 28 28 (rgb 255 220 0) (rotate {45 + tilt}) (visible open))
+(rect {cx - item_w / 2} {cy - dy - item_h} item_w item_h (rgb 230 40 60) (rotate tilt) (visible open))
+(rect {cx + dx - item_w / 2} {cy - item_h / 2} item_w item_h (rgb 40 120 230) (rotate tilt) (visible open))
+(rect {cx - item_w / 2} {cy + dy} item_w item_h (rgb 40 200 110) (rotate tilt) (visible open))
+(rect {cx - dx - item_w / 2} {cy - item_h / 2} item_w item_h (rgb 240 200 40) (rotate tilt) (visible open))
 
-;; 項目（1つ目が選択中）
-(rect 60 top item_w item_h (rgb 230 40 60) (rotate tilt))
-(rect 60 {top + (item_h + gap)} item_w item_h (rgb 240 240 240) (rotate tilt))
-(rect 60 {top + (item_h + gap) * 2} item_w item_h (rgb 240 240 240) (rotate tilt))
-(rect 60 {top + (item_h + gap) * 3} item_w item_h (rgb 240 240 240) (rotate tilt))
-
-;; カーソル（脈動）
-(rect 44 {top - 4} 10 {item_h + 8} (rgb 255 220 0) (rotate {tilt + sin(time * pulse_speed) * 4}))
+;; 画面（色で区別）
+(rect page_x 60 {width - 120} {height - 120} (rgb 230 40 60) (visible {page * (screen == 0)}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 40 120 230) (visible {page * (screen == 1)}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 40 200 110) (visible {page * (screen == 2)}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 240 200 40) (visible {page * (screen == 3)}))
+(rect page_x 60 {width - 120} 48 (rgba 0 0 0 120) (visible page))

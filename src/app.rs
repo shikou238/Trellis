@@ -130,6 +130,7 @@ impl ApplicationHandler<AppView> for App {
                     KeyEvent {
                         physical_key: PhysicalKey::Code(code),
                         state: key_state,
+                        repeat,
                         ..
                     },
                 ..
@@ -140,8 +141,11 @@ impl ApplicationHandler<AppView> for App {
                         _ => {}
                     }
                     let window_wrapper = &mut appview.windows[window_index];
-                    window_wrapper.handle_key(event_loop, code, key_state.is_pressed());
+                    window_wrapper.handle_key(event_loop, code, key_state.is_pressed(), repeat);
             },
+            WindowEvent::Focused(false) => {
+                appview.windows[window_index].focus_lost();
+            }
             WindowEvent::RedrawRequested => {
                 let window_wrapper = &mut appview.windows[window_index];
                 window_wrapper.update(device, queue);

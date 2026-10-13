@@ -1,30 +1,58 @@
 ;; 方式B: メニューを開き、方向キーで選び、決定キーを押す（昔からある方式）
-;; いまは見た目だけ。入力とステートマシンは次の段階で足す
-;; 保存すると自動でリロードされる
+;;   Space                  → メニューを開く / 閉じる
+;;   ↑ ↓                    → 項目を選ぶ
+;;   Enter / Z              → その画面へ
+;;   Backspace / X          → 1つ戻る（画面 → メニュー → 閉じる）
+;; 保存すると自動でリロードされる（今の状態と変数は引き継ぐ）
 
 (defparam item_w 300 (Float 100 500 _))
 (defparam item_h 40 (Float 20 100 _))
 (defparam gap 6 (Float 0 40 _))
 (defparam padding 16 (Float 0 60 _))
 (defparam blink_speed 3 (Float 0 10 _))
+(defparam page_time 0.18 (Float 0 1 _))    ;; 画面が出るアニメーションの長さ（秒）
+
+(var cursor 0)  ;; 選んでいる項目
+(var screen 0)  ;; 開いた画面
+
+(state closed
+  (on (press menu) (set cursor 0) (goto open)))
+(state open
+  (on (press down) (set cursor {wrap(cursor + 1, 4)}))
+  (on (press up) (set cursor {wrap(cursor - 1, 4)}))
+  (on (press confirm) (set screen cursor) (goto page))
+  (on (press cancel) (goto closed))
+  (on (press menu) (goto closed)))
+(state page
+  (on (press cancel) (goto open)))
 
 (def panel_w {item_w + padding * 2})
 (def panel_h {(item_h + gap) * 4 - gap + padding * 2})
 (def left {(width - panel_w) / 2})
 (def top {(height - panel_h) / 2})
+(def row {item_h + gap})
+(def page_in {smoothstep(0, page_time, state_time)})
+(def page_x {lerp(width, 60, page_in)})
 
 (background (rgb 16 32 48))
 
-;; ウィンドウ枠
-(rect {left - 3} {top - 3} {panel_w + 6} {panel_h + 6} (rgb 220 220 220))
-(rect left top panel_w panel_h (rgb 20 30 90))
+;; メニューの枠
+(rect {left - 3} {top - 3} {panel_w + 6} {panel_h + 6} (rgb 220 220 220) (visible open))
+(rect left top panel_w panel_h (rgb 20 30 90) (visible open))
 
-;; 選択中の項目のハイライト（点滅）
-(rect {left + padding} {top + padding} item_w item_h
-      (rgba 255 255 255 {90 + 60 * sin(time * blink_speed)}))
+;; 選んでいる項目のハイライト（点滅）
+(rect {left + padding} {top + padding + row * cursor} item_w item_h
+      (rgba 255 255 255 {90 + 60 * sin(time * blink_speed)}) (visible open))
 
-;; 項目
-(rect {left + padding + 12} {top + padding + item_h / 2 - 4} 8 8 (rgb 255 255 255))
-(rect {left + padding + 12} {top + padding + (item_h + gap) + item_h / 2 - 4} 8 8 (rgb 160 170 200))
-(rect {left + padding + 12} {top + padding + (item_h + gap) * 2 + item_h / 2 - 4} 8 8 (rgb 160 170 200))
-(rect {left + padding + 12} {top + padding + (item_h + gap) * 3 + item_h / 2 - 4} 8 8 (rgb 160 170 200))
+;; 項目（行き先の画面と同じ色の印）
+(rect {left + padding + 12} {top + padding + item_h / 2 - 6} 12 12 (rgb 230 40 60) (visible open))
+(rect {left + padding + 12} {top + padding + row + item_h / 2 - 6} 12 12 (rgb 40 120 230) (visible open))
+(rect {left + padding + 12} {top + padding + row * 2 + item_h / 2 - 6} 12 12 (rgb 40 200 110) (visible open))
+(rect {left + padding + 12} {top + padding + row * 3 + item_h / 2 - 6} 12 12 (rgb 240 200 40) (visible open))
+
+;; 画面（色で区別）
+(rect page_x 60 {width - 120} {height - 120} (rgb 230 40 60) (visible {page * (screen == 0)}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 40 120 230) (visible {page * (screen == 1)}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 40 200 110) (visible {page * (screen == 2)}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 240 200 40) (visible {page * (screen == 3)}))
+(rect page_x 60 {width - 120} 48 (rgba 0 0 0 120) (visible page))

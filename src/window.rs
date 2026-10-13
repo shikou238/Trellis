@@ -11,6 +11,7 @@ use crate::camera;
 
 use wgpu::util::DeviceExt;
 use crate::texture::TextureWrapper;
+use crate::input::InputMapper;
 use crate::ui::ScenePlayer;
 use crate::ui::renderer::{UiLayer, UiRenderer};
 pub struct WindowWrapper{
@@ -28,6 +29,7 @@ pub struct WindowWrapper{
     pub depth_texture: TextureWrapper,
     pub scene: ScenePlayer,
     pub ui_layer: UiLayer,
+    input: InputMapper,
     /// シーンが指定した背景色（線形 RGBA）。None ならカーソル位置の色
     background: Option<[f32; 4]>,
 }
@@ -120,6 +122,7 @@ impl WindowWrapper {
             depth_texture,
             scene: ScenePlayer::new(scene_path),
             ui_layer: UiLayer::new(device, ui_renderer),
+            input: InputMapper::default(),
             background: None,
         }
     }
@@ -136,18 +139,28 @@ impl WindowWrapper {
 
     }
     // impl State
-    pub fn handle_key(&mut self, _event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
+    pub fn handle_key(&mut self, _event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool, repeat: bool) {
         self.camera_controller.handle_key(code, is_pressed);
+
+        let mut inputs = Vec::new();
+        self.input.key(code, is_pressed, repeat, &mut inputs);
+        self.scene.queue_inputs(&inputs);
+    }
+    /// フォーカスを失うとキーの解放が届かないので、押されているものをすべて離す
+    pub fn focus_lost(&mut self) {
+        let mut inputs = Vec::new();
+        self.input.release_all(&mut inputs);
+        self.scene.queue_inputs(&inputs);
     }
     pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
-        self.scene.poll_file();
-        self.scene.advance();
         let scale = self.nature.scale_factor() as f32;
         let logical_size = [self.config.width as f32 / scale, self.config.height as f32 / scale];
+        self.scene.poll_file();
+        self.scene.advance(logical_size);
         self.ui_layer.instances.clear();
         self.background = self.scene.build(logical_size, &mut self.ui_layer.instances);
         self.ui_layer.upload(device, queue, logical_size);
@@ -247,19 +260,19 @@ impl CameraController {
     fn handle_key(&mut self, code: KeyCode, is_pressed: bool) -> bool {
         log::debug!("code: {:?}, is_pressed: {:?}", code, is_pressed);
         match code {
-            KeyCode::KeyW | KeyCode::ArrowUp => {
+            KeyCode::KeyW => {
                 self.is_forward_pressed = is_pressed;
                 true
             }
-            KeyCode::KeyA | KeyCode::ArrowLeft => {
+            KeyCode::KeyA => {
                 self.is_left_pressed = is_pressed;
                 true
             }
-            KeyCode::KeyS | KeyCode::ArrowDown => {
+            KeyCode::KeyS => {
                 self.is_backward_pressed = is_pressed;
                 true
             }
-            KeyCode::KeyD | KeyCode::ArrowRight => {
+            KeyCode::KeyD => {
                 self.is_right_pressed = is_pressed;
                 true
             }
