@@ -13,7 +13,6 @@ enum TokenKind {
     Star, // `*`
     Slash, // `/`
     Bang, // `!`
-    Comma, // `,`
     EqEq, // `==`
     NotEq, // `!=`
     Less, // `<`
@@ -210,10 +209,6 @@ impl<'a> Lexer<'a> {
                 '>' => {
                     self.advance();
                     if self.eat('=') { TokenKind::GreaterEq } else { TokenKind::Greater }
-                }
-                ',' => {
-                    self.advance();
-                    TokenKind::Comma
                 }
                 '"' => self.read_string().map_err(|m| self.error_from(start, m))?,
                 c if c.is_ascii_digit() => self.read_number().map_err(|m| self.error_from(start, m))?,
@@ -541,11 +536,14 @@ impl Parser {
                 let name = name.clone();
                 self.advance();
 
+                // 旧い書き方 `f(a, b)` には新しい書き方を案内する
                 if matches!(self.current().kind, TokenKind::LParen) {
-                    self.parse_expr_call(name)
-                } else {
-                    Ok(Expr::Symbol(name))
+                    return Err(self.error_here(format!(
+                        "function calls are written in S-expression form: `({} a b)`, not `{}(a, b)`",
+                        name, name
+                    )));
                 }
+                Ok(Expr::Symbol(name))
             }
 
             TokenKind::Minus => {
@@ -569,42 +567,64 @@ impl Parser {
                     expr: Box::new(expr),
                 })
             }
-            //todo : 
-            TokenKind::LParen => {
-                self.advance();
+            // `{}` の中の `( )` は S 式の関数呼び出し: (f 引数...)
+            TokenKind::LParen => self.parse_expr_call(),
 
-                let expr = self.parse_expr_bp(0)?;
-
-                self.expect_rparen()?;
-
-                Ok(expr)
-            }
+            // 結合の順番を変えたいときは `{ }` を入れ子にする: {{a + b} * 2}
+            TokenKind::LBrace => self.parse_braced_expression(),
 
             _ => Err(self.error_here("expected expression")),
         }
     }
 
-    fn parse_expr_call(&mut self, callee: String) -> ParseResult<Expr> {
+    /// (f 引数...)。引数は 数値 / 名前 / {中置式} / (関数呼び出し) のどれか。中置の演算は {} で囲む
+    fn parse_expr_call(&mut self) -> ParseResult<Expr> {
         self.expect_lparen()?;
 
-        let mut args = Vec::new();
-
-        if !(self.current().kind == TokenKind::RParen) {
-            loop {
-                args.push(self.parse_expr_bp(0)?);
-                //todo
-                if self.current().kind == TokenKind::Comma {
-                    self.advance();
-                    continue;
-                }
-
-                break;
+        const GROUPING: &str = "`( )` is a function call `(f a b)`; to group an expression use `{ }`, e.g. `{{a + b} * 2}`";
+        let callee = match &self.current().kind {
+            TokenKind::Symbol(name) => {
+                let name = name.clone();
+                self.advance();
+                name
             }
+            _ => return Err(self.error_here(GROUPING)),
+        };
+        // `(a + b)` のように関数名の直後に演算子が来たら、結合のためのかっこと判断して案内する
+        // ただし `(abs -2)` の `-2` は負のリテラルなので除く
+        let negative_literal = self.current().kind == TokenKind::Minus && self.next_is_adjacent_number();
+        if self.current_binary_op().is_some() && !negative_literal {
+            return Err(self.error_here(GROUPING));
+        }
+
+        let mut args = Vec::new();
+        while !matches!(self.current().kind, TokenKind::RParen | TokenKind::Eof) {
+            args.push(self.parse_call_arg()?);
         }
 
         self.expect_rparen()?;
 
         Ok(Expr::Call { callee, args })
+    }
+
+    fn parse_call_arg(&mut self) -> ParseResult<Expr> {
+        match &self.current().kind {
+            // 名前の直後に次の引数の `(` が来てもよいので、parse_prefix_expr を通さずに読む
+            TokenKind::Symbol(name) => {
+                let name = name.clone();
+                self.advance();
+                Ok(Expr::Symbol(name))
+            }
+            TokenKind::Integer(_) | TokenKind::Float(_) | TokenKind::LParen | TokenKind::LBrace => {
+                self.parse_prefix_expr()
+            }
+            // `-1` のように数値に密着した `-` は負のリテラル
+            TokenKind::Minus if self.next_is_adjacent_number() => {
+                self.advance();
+                Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(self.parse_prefix_expr()?) })
+            }
+            _ => Err(self.error_here("expected a number, name, {expression}, or (call) as an argument; wrap operators in {}")),
+        }
     }
 
     fn current_binary_op(&self) -> Option<(BinaryOp, u8, u8)> {

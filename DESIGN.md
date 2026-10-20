@@ -69,6 +69,7 @@ ui/
   menu_b.ui          ウィンドウ2のシーン（方式B: 開いて選んで決定する縦並びメニュー）
   tasks.ui           計測の設定（交互に試すシーン、試行回数、制限時間、課題）
 logs/                計測のログ（.gitignore 済み。1 回の計測につき 1 ファイル）
+DSL.md               UI シーン DSL のリファレンス（書き方・組み込み関数の表）
 pentagon.json        3D モデルデータ（※中身は JSON ではなく S式）
 happy-tree.png       3D 用ディフューズテクスチャ
 run.html, pkg/       wasm 実行用（wasm-pack 出力。現在は動かない → §9）
@@ -359,6 +360,9 @@ Running: 入力をシーンに渡し、入力・遷移・無視された押下�
 ### 6.1 構文の考え方
 
 構造は S式（Lisp 風、`;;` 行コメント）、数式だけ `{ ... }` で囲んだ中置記法。前置記法で数式を書く煩わしさを避けるハイブリッド。
+**関数呼び出しは `{}` の中でも外でも S式** `(f a b)` で書く。`{}` の中の `( )` は常に関数呼び出しで、結合の順番を変えるかっこは `{}` を入れ子にする（`{{a + b} * 2}`）。かっこの意味を1つに保つため。
+
+**書き方の一覧（関数の表を含む）は [DSL.md](DSL.md)**。この節は実装の説明。
 
 ### 6.2 パーサー（`parser.rs`）
 
@@ -367,10 +371,13 @@ Running: 入力をシーンに渡し、入力・遷移・無視された押下�
 ```
 
 - 公開 API: `parser::parse(source) -> ParseResult<Vec<AstNode>>`、`parser::line_col(source, index) -> (行, 列)`（1始まり）。
-- **Lexer**: `( ) { } + - * / ! , == != < <= > >=`, 整数, 浮動小数（`1.5`）, 文字列（`\n \t \" \\`）, シンボル（先頭 `[A-Za-z_?]`, 以降 `[A-Za-z0-9_\-?!]`）。単独の `=` はエラー。
+- **Lexer**: `( ) { } + - * / ! == != < <= > >=`, 整数, 浮動小数（`1.5`）, 文字列（`\n \t \" \\`）, シンボル（先頭 `[A-Za-z_?]`, 以降 `[A-Za-z0-9_\-?!]`）。単独の `=` はエラー。
 - **AstNode**: `{ kind: AstKind, span: Span }`。`AstKind` は `Form{head, args}` / `Expr(Expr)` / `Integer` / `Float` / `String` / `Symbol`。Form の head は必ずシンボル。
 - **負のリテラル**: 数値に密着した `-`（`-12`）はフォーム中でも負の数として読む。離れた `- 12` は不可。
-- **Expr**: Pratt パーサー。左結合。`f(a, b)` 形式の関数呼び出しと `( )` によるグルーピングに対応。
+- **Expr**: Pratt パーサー。左結合。前置位置（`parse_prefix_expr`）で:
+  - `(` → **S式の関数呼び出し** `(f 引数...)`（`parse_expr_call`）。引数は リテラル / 名前 / `{中置式}` / `(関数呼び出し)` / 密着した負のリテラル（`parse_call_arg`）。演算子は引数に裸で書けない。
+  - `{` → 入れ子の中置式（グループ化）。
+  - 名前の直後の `(`（旧い `f(a, b)`）と、関数名の直後の演算子・数字で始まるかっこ（`(a + b)`, `(1 + 2)`）は、新しい書き方を案内するエラーにする。
 
   | 優先度（弱い → 強い） | 演算子 | binding power |
   |---|---|---|
@@ -390,7 +397,7 @@ Running: 入力をシーンに渡し、入力・遷移・無視された押下�
 (state closed                             ;; 状態。最初に書いた state が初期状態
   (on (press menu) (set cursor 0) (goto open)))
 (state open
-  (on (press down) (set cursor {wrap(cursor + 1, 4)}))    ;; goto なし = 状態はそのまま
+  (on (press down) (set cursor (wrap {cursor + 1} 4)))    ;; goto なし = 状態はそのまま
   (on (press confirm) (when {cursor == 2}) (emit opened cursor) (goto closed)) ;; when = 条件、emit = 意味のある通知
   (on (release menu) (goto closed))
   (on (after 2) (goto closed)))           ;; この状態に入ってから 2 秒後（goto 必須）
@@ -401,12 +408,12 @@ Running: 入力をシーンに渡し、入力・遷移・無視された押下�
 
 | 要素 | 内容 |
 |---|---|
-| 数値が書ける場所 | リテラル / 名前 / `{中置式}` |
+| 数値が書ける場所 | リテラル / 名前 / `{中置式}` / `(関数 引数...)`（`{}` の外の関数呼び出しは `Compiler::number` が `Form` として受け取る） |
 | 色 | `(rgb r g b)` / `(rgba r g b a)`。すべて 0–255 |
 | パラメータ型 | `Int` / `Float`（現状どちらも f32 として扱う） |
 | 組み込みの値 | `time`（秒）, `state_time`（今の状態に入ってからの秒）, `width`, `height`（論理ピクセル）, `pi` |
-| 状態名 | 式の中では、その状態にいれば 1、いなければ 0（`(visible open)`, `{page * (screen == 0)}`） |
-| 関数 | `sin` `cos`（ラジアン）, `abs` `floor` `min` `max` `clamp(x, lo, hi)` `lerp(a, b, t)` `wrap(x, n)`（0..n に折り返す） `select(条件, 真, 偽)` `smoothstep(端0, 端1, x)` |
+| 状態名 | 式の中では、その状態にいれば 1、いなければ 0（`(visible open)`, `{page * {screen == 0}}`） |
+| 関数 | `sin` `cos` `abs` `floor` `min` `max` `clamp` `lerp` `wrap` `select` `smoothstep`。**引数と使い方の表は [DSL.md](DSL.md) §4** |
 | 操作（`press` / `release` の引数） | `menu` `up` `down` `left` `right` `confirm` `cancel`（キー配置は §8） |
 
 **ステートマシンの規則**（`Scene::step`）:
@@ -528,6 +535,7 @@ PLAN.md §4.6 の 1〜3（2 つの方式・スライダーとホットリロー�
 - 新しい GPU 用構造体は `#[repr(C)]` + `bytemuck::Pod/Zeroable`。シェーダの `@location` / `@group` と必ず同期させる（3D は `Vertex::LAYOUT` / `ModelInstanceRaw::desc()`、UI は `RectInstance::LAYOUT`）。
 - 3D の bind group を追加したら `ShaderWrapper::bind_group_layouts`（index = group 番号）に追加する。UI 側は `UiRenderer` が自前でレイアウトを持つ。
 - DSL に新しいフォームや関数を足すときは、`ui/scene.rs` の `Scene::compile` / `Compiler` / `Func::lookup` を更新し、テストを足す。名前はコンパイル時にスロットへ解決し、毎フレーム名前で検索しない。スロットの並びを変えたら `Scene` のコメントと §6.3 も直す。
+- **DSL の書き方を変えたら [DSL.md](DSL.md) も直す**（関数を足したら §4 の表に行を足す）。
 - シーンはキーを直接見ない。新しい入力（キー、パッド、タッチ）は `input.rs` で `Action` に変換して渡す。操作を増やすときは `Action` と `action_for_key` を更新する。
 - 実行時の状態は `Runtime` に置き、`Scene` には置かない（リロードで消えないように）。状態を足したら `Scene::adopt` で引き継ぎ方を決める。
 - `ui/*.ui` を変えたら `cargo test --lib` を回す（同梱のシーンを読み込むテストがある）。

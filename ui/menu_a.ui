@@ -5,7 +5,7 @@
 ;;   画面で Backspace / X   → 閉じる
 ;; 保存すると自動でリロードされる（今の状態と変数は引き継ぐ）
 
-(defparam item_w 180.391 (Float 60 300 _))
+(defparam item_w 198.996 (Float 60 300 _))
 (defparam item_h 52.395 (Float 20 100 _))
 (defparam distance 142.149 (Float 40 300 _))    ;; 中心から項目までの距離
 (defparam tilt -9.01 (Float -30 30 _))
@@ -27,11 +27,11 @@
 
 (def cx {width / 2})
 (def cy {height / 2})
-(def appear {smoothstep(0, open_time, state_time)})   ;; 0 → 1
+(def appear (smoothstep 0 open_time state_time))   ;; 0 → 1
 (def dy {distance * appear})
-(def dx {(distance + item_w / 2) * appear})
-(def page_in {smoothstep(0, page_time, state_time)})
-(def page_x {lerp(width, 60, page_in)})
+(def dx {{distance + item_w / 2} * appear})
+(def page_in (smoothstep 0 page_time state_time))
+(def page_x (lerp width 60 page_in))
 
 (background (rgb 24 24 32))
 
@@ -43,8 +43,8 @@
 (rect {cx - dx - item_w / 2} {cy - item_h / 2} item_w item_h (rgb 240 200 40) (rotate tilt) (visible open))
 
 ;; 画面（色で区別）
-(rect page_x 60 {width - 120} {height - 120} (rgb 230 40 60) (visible {page * (screen == 0)}))
-(rect page_x 60 {width - 120} {height - 120} (rgb 40 120 230) (visible {page * (screen == 1)}))
-(rect page_x 60 {width - 120} {height - 120} (rgb 40 200 110) (visible {page * (screen == 2)}))
-(rect page_x 60 {width - 120} {height - 120} (rgb 240 200 40) (visible {page * (screen == 3)}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 230 40 60) (visible {page * {screen == 0}}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 40 120 230) (visible {page * {screen == 1}}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 40 200 110) (visible {page * {screen == 2}}))
+(rect page_x 60 {width - 120} {height - 120} (rgb 240 200 40) (visible {page * {screen == 3}}))
 (rect page_x 60 {width - 120} 48 (rgba 0 0 0 120) (visible page))

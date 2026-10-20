@@ -9,14 +9,16 @@
 //! (state closed                             ;; 状態。最初に書いた state が初期状態
 //!   (on (press menu) (set cursor 0) (goto open)))
 //! (state open
-//!   (on (press down) (set cursor {wrap(cursor + 1, 4)}))  ;; goto なし = 状態はそのまま
+//!   (on (press down) (set cursor (wrap {cursor + 1} 4)))  ;; goto なし = 状態はそのまま
 //!   (on (press confirm) (when {cursor == 0}) (emit opened cursor) (goto closed))  ;; emit = 意味のある通知（計測の完了判定に使う）
 //!   (on (after 2) (goto closed)))           ;; この状態に入ってから 2 秒経ったら
 //! (def top {height / 2 - 120})              ;; 毎フレーム計算される名前付きの値。def 同士は使うより前に定義する
 //! (background (rgb 24 24 32))
 //! (rect x y w h (rgb 255 0 0) (rotate 15) (visible open))
 //! ```
-//! 数値には リテラル / 名前 / {中置式} が書ける。
+//! 数値には リテラル / 名前 / {中置式} / (関数 引数...) が書ける。
+//! {} の中でも `(` は関数呼び出し: {90 + 60 * (sin {time * 2})}。結合の順番を変えるかっこは {} を入れ子にする: {{a + b} * 2}
+//! 関数の一覧と使い方は DSL.md。
 //! 組み込みの値: `time`, `state_time`（今の状態に入ってからの秒数）, `width`, `height`（論理ピクセル）, `pi`
 //! 状態の名前は、その状態にいれば 1、いなければ 0 の値として使える。
 //! 関数: sin cos abs floor min max clamp lerp wrap select smoothstep
@@ -618,8 +620,23 @@ impl Compiler {
             AstKind::Float(v) => Ok(CExpr::Const(*v as f32)),
             AstKind::Symbol(name) => self.slot(name, node),
             AstKind::Expr(expr) => self.expr(expr, node),
-            _ => Err(error(node, "expected a number, name, or {expression}")),
+            // {} の外でも (f 引数...) は関数呼び出し
+            AstKind::Form { head, args } => {
+                let args = args.iter().map(|a| self.number(a)).collect::<ParseResult<_>>()?;
+                self.call(head, args, node)
+            }
+            _ => Err(error(node, "expected a number, name, {expression}, or (function ...)")),
         }
+    }
+
+    fn call(&self, callee: &str, args: Vec<CExpr>, node: &AstNode) -> ParseResult<CExpr> {
+        let Some((func, arity)) = Func::lookup(callee) else {
+            return Err(error(node, format!("unknown function `{}`", callee)));
+        };
+        if args.len() != arity {
+            return Err(error(node, format!("`{}` takes {} argument(s), got {}", callee, arity, args.len())));
+        }
+        Ok(CExpr::Call(func, args))
     }
 
     /// Expr は位置を持たないので、エラーは囲んでいるノードの位置で報告する
@@ -641,17 +658,8 @@ impl Compiler {
                 Box::new(self.expr(right, node)?),
             ),
             Expr::Call { callee, args } => {
-                let Some((func, arity)) = Func::lookup(callee) else {
-                    return Err(error(node, format!("unknown function `{}`", callee)));
-                };
-                if args.len() != arity {
-                    return Err(error(
-                        node,
-                        format!("`{}` takes {} argument(s), got {}", callee, arity, args.len()),
-                    ));
-                }
                 let args = args.iter().map(|a| self.expr(a, node)).collect::<ParseResult<_>>()?;
-                CExpr::Call(func, args)
+                self.call(callee, args, node)?
             }
         })
     }
@@ -843,14 +851,38 @@ mod tests {
     #[test]
     fn operators_and_functions() {
         let rects = eval_rects(
-            "(rect {10 - 3 - 2} {clamp(5, 0, 3)} {max(1, 2) * -2} {1 + 1 == 2} (rgb 0 0 0))
-             (rect {wrap(-1, 4)} {select(2 > 3, 10, 20)} {3 <= 3} {!(1 != 1)} (rgb 0 0 0))",
+            "(rect {10 - 3 - 2} {(clamp 5 0 3)} {(max 1 2) * -2} {1 + 1 == 2} (rgb 0 0 0))
+             (rect (wrap -1 4) (select {2 > 3} 10 20) {3 <= 3} {!{1 != 1}} (rgb 0 0 0))",
             0,
         );
         assert_eq!(rects[0].position, [5.0, 3.0]);
         assert_eq!(rects[0].size, [-4.0, 1.0]);
         assert_eq!(rects[1].position, [3.0, 20.0]);
         assert_eq!(rects[1].size, [1.0, 1.0]);
+    }
+
+    #[test]
+    fn s_expression_calls_and_brace_grouping() {
+        let rects = eval_rects(
+            "(defparam a 3 (Float _ _ _))
+             (rect {{a + 1} * 2} {a + 1 * 2} {(max a (min 10 {a * 3}))} {(clamp {a / 2} 0 1)} (rgb 0 0 0))
+             (rect (abs -2) {-(abs -2) + (lerp 0 10 0.5)} (floor 2.7) {{{1 + 1}}} (rgb 0 0 0))",
+            0,
+        );
+        assert_eq!(rects[0].position, [8.0, 5.0]);
+        assert_eq!(rects[0].size, [9.0, 1.0]);
+        assert_eq!(rects[1].position, [2.0, 3.0]);
+        assert_eq!(rects[1].size, [2.0, 2.0]);
+    }
+
+    #[test]
+    fn old_call_syntax_and_grouping_parens_point_to_the_new_syntax() {
+        let err = Scene::compile("(rect {sin(time)} 0 1 1 (rgb 0 0 0))").err().unwrap();
+        assert!(err.message.contains("(sin a b)"), "{}", err.message);
+        for grouping in ["(rect {(a + b) * 2} 0 1 1 (rgb 0 0 0))", "(rect {(1 + 2) * 2} 0 1 1 (rgb 0 0 0))"] {
+            let err = Scene::compile(grouping).err().unwrap();
+            assert!(err.message.contains("to group an expression use"), "{}", err.message);
+        }
     }
 
     #[test]
@@ -912,7 +944,7 @@ mod tests {
         (state closed
           (on (press menu) (set cursor 0) (goto open)))
         (state open
-          (on (press down) (set cursor {wrap(cursor + 1, 3)}))
+          (on (press down) (set cursor (wrap {cursor + 1} 3)))
           (on (press confirm) (when {cursor == 2}) (goto closed))
           (on (release menu) (goto closed))
           (on (after 1) (goto closed)))
@@ -1024,7 +1056,12 @@ mod tests {
             "(circle 1 2)",
             "(rect 0 0 1 1 (rgb 0 0))",
             "(def time 1)",
-            "(rect {sin(1, 2)} 0 1 1 (rgb 0 0 0))",
+            "(rect {(sin 1 2)} 0 1 1 (rgb 0 0 0))",
+            "(rect (nope 1) 0 1 1 (rgb 0 0 0))",
+            "(rect {sin(1)} 0 1 1 (rgb 0 0 0))",     // 旧い呼び出し方
+            "(rect {(a + b) * 2} 0 1 1 (rgb 0 0 0))", // かっこでのグループ化は不可（{} を使う）
+            "(rect {(max 1 - 2)} 0 1 1 (rgb 0 0 0))", // 引数に演算子を書くなら {} で囲む
+            "(rect {f(1, 2)} 0 1 1 (rgb 0 0 0))",
             "(state a (on (press jump) (goto a)))",
             "(state a (on (press menu) (goto b)))",
             "(state a (on (after 1)))",
