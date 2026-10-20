@@ -143,6 +143,7 @@ impl ApplicationHandler<AppView> for App {
                 match (code, key_state.is_pressed()) {
                     (KeyCode::Escape, true) => event_loop.exit(),
                     (KeyCode::KeyR, true) => {appview.reload();},
+                    (KeyCode::KeyT, true) if !repeat => appview.toggle_session(window_id),
                         _ => {}
                     }
                     let window_wrapper = &mut appview.windows[window_index];
@@ -152,6 +153,7 @@ impl ApplicationHandler<AppView> for App {
                 appview.windows[window_index].focus_lost();
             }
             WindowEvent::RedrawRequested => {
+                appview.collect_finished_sessions();
                 if appview.is_inspector(window_id) {
                     appview.build_inspector();
                 }

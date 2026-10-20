@@ -1,8 +1,10 @@
 //! UI シーン（DSL）の読み込み・ホットリロード・実行。
 
+pub mod analysis;
 pub mod inspector;
 pub mod renderer;
 pub mod scene;
+pub mod session;
 pub mod text;
 
 use std::time::{Duration, Instant, SystemTime};
@@ -27,13 +29,14 @@ pub struct ScenePlayer {
     runtime: Runtime,
     last_modified: Option<SystemTime>,
     last_poll: Instant,
-    clock: Instant,
-    accumulator: Duration,
+    clock: FixedClock,
     tick: u64,
     /// 次の tick で処理する入力
     pending_inputs: Vec<InputEvent>,
     env: Vec<f32>,
     last_error: Option<String>,
+    /// 最後に読み込みに成功したソース
+    source: String,
 }
 
 impl ScenePlayer {
@@ -44,12 +47,12 @@ impl ScenePlayer {
             runtime: Runtime::default(),
             last_modified: None,
             last_poll: Instant::now(),
-            clock: Instant::now(),
-            accumulator: Duration::ZERO,
+            clock: FixedClock::new(),
             tick: 0,
             pending_inputs: Vec::new(),
             env: Vec::new(),
             last_error: None,
+            source: String::new(),
         };
         player.reload();
         player
@@ -74,6 +77,7 @@ impl ScenePlayer {
                 self.runtime = scene.adopt(previous, self.tick);
                 self.scene = Some(scene);
                 self.last_error = None;
+                self.source = source;
             }
             Err(e) => {
                 let (line, col) = parser::line_col(&source, e.span.start);
@@ -101,20 +105,37 @@ impl ScenePlayer {
 
     /// 経過した実時間ぶん tick を進める。たまっている入力は最初の tick で処理する
     pub fn advance(&mut self, logical_size: [f32; 2]) {
-        let now = Instant::now();
-        self.accumulator = (self.accumulator + (now - self.clock)).min(MAX_CATCH_UP);
-        self.clock = now;
-        while self.accumulator >= TICK {
-            self.accumulator -= TICK;
-            self.tick += 1;
+        for _ in 0..self.clock.ticks_due() {
             let inputs = std::mem::take(&mut self.pending_inputs);
-            if let Some(scene) = &self.scene {
-                let (path, tick) = (&self.path, self.tick);
-                scene.step(&mut self.runtime, tick, &inputs, logical_size, &mut self.env, &mut |event| {
-                    log_step_event(path, tick, event)
-                });
-            }
+            let (path, tick) = (self.path.clone(), self.tick + 1);
+            self.step_tick(&inputs, logical_size, &mut |event| log_step_event(&path, tick, event));
         }
+    }
+
+    /// 1 tick 進める。計測（`session.rs`）は自分の時計でこれを呼び、起きたことを `report` で受け取る
+    pub fn step_tick(&mut self, inputs: &[InputEvent], logical_size: [f32; 2], report: &mut dyn FnMut(StepEvent)) {
+        self.tick += 1;
+        if let Some(scene) = &self.scene {
+            scene.step(&mut self.runtime, self.tick, inputs, logical_size, &mut self.env, report);
+        }
+    }
+
+    /// 実行時の状態を初期状態に戻す（計測の試行ごとに条件をそろえるため）。定義とパラメータはそのまま
+    pub fn reset(&mut self) {
+        self.pending_inputs.clear();
+        if let Some(scene) = &self.scene {
+            self.runtime = scene.adopt(None, self.tick);
+        }
+    }
+
+    /// パラメータの (名前, 値) の一覧。計測中の変更を検出してログに残すために使う
+    pub fn param_values(&self) -> Vec<(String, f32)> {
+        self.params().iter().map(|p| (p.name.clone(), p.value)).collect()
+    }
+
+    /// 今読み込んでいるソース。計測のログにハッシュを残すために使う
+    pub fn source(&self) -> &str {
+        &self.source
     }
 
     pub fn path(&self) -> &str {
@@ -165,7 +186,7 @@ impl ScenePlayer {
     }
 }
 
-/// いまはログに出すだけ。操作ログ（PLAN.md §4.5）はここから記録する
+/// 普段の操作ではログに出すだけ。計測中の記録は `session.rs` が行う
 fn log_step_event(path: &str, tick: u64, event: StepEvent) {
     match event {
         StepEvent::Transition { from, to, label } => {
@@ -175,5 +196,31 @@ fn log_step_event(path: &str, tick: u64, event: StepEvent) {
         StepEvent::Ignored { state, input } => {
             log::info!("{} [tick {}] {}: ignored press {}", path, tick, state, input.action.name())
         }
+        StepEvent::Emit { name, args } => log::info!("{} [tick {}] emit {} {:?}", path, tick, name, args),
+    }
+}
+
+/// 実時間を固定タイムステップの tick 数に変換する
+pub struct FixedClock {
+    last: Instant,
+    accumulator: Duration,
+}
+
+impl FixedClock {
+    pub fn new() -> Self {
+        Self { last: Instant::now(), accumulator: Duration::ZERO }
+    }
+
+    /// 前回呼んでから進めるべき tick 数
+    pub fn ticks_due(&mut self) -> u32 {
+        let now = Instant::now();
+        self.accumulator = (self.accumulator + (now - self.last)).min(MAX_CATCH_UP);
+        self.last = now;
+        let mut ticks = 0;
+        while self.accumulator >= TICK {
+            self.accumulator -= TICK;
+            ticks += 1;
+        }
+        ticks
     }
 }

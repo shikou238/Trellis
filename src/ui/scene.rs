@@ -10,7 +10,7 @@
 //!   (on (press menu) (set cursor 0) (goto open)))
 //! (state open
 //!   (on (press down) (set cursor {wrap(cursor + 1, 4)}))  ;; goto なし = 状態はそのまま
-//!   (on (press confirm) (when {cursor == 0}) (goto closed))
+//!   (on (press confirm) (when {cursor == 0}) (emit opened cursor) (goto closed))  ;; emit = 意味のある通知（計測の完了判定に使う）
 //!   (on (after 2) (goto closed)))           ;; この状態に入ってから 2 秒経ったら
 //! (def top {height / 2 - 120})              ;; 毎フレーム計算される名前付きの値。def 同士は使うより前に定義する
 //! (background (rgb 24 24 32))
@@ -113,6 +113,8 @@ struct Transition {
     guard: Option<CExpr>,
     /// (変数番号, 値)
     sets: Vec<(usize, CExpr)>,
+    /// (名前, 値)。set と同じく遷移前の環境で評価する
+    emits: Vec<(String, Vec<CExpr>)>,
     target: Option<usize>,
     /// ログ用の説明（例: "press down"）
     label: String,
@@ -140,6 +142,8 @@ pub enum StepEvent<'a> {
     Internal { state: &'a str, label: &'a str },
     /// どの遷移にも当てはまらなかった押下（「入力が無視された」）
     Ignored { state: &'a str, input: InputEvent },
+    /// `(emit 名前 値...)` による意味のある通知（「画面1を開いた」など）。計測の完了判定に使う
+    Emit { name: &'a str, args: Vec<f32> },
 }
 
 struct RectItem {
@@ -454,6 +458,11 @@ impl Scene {
 
         // 全部の値を同じ環境で評価してから代入する（set を書く順番に結果が左右されないように）
         let values: Vec<f32> = transition.sets.iter().map(|(_, value)| value.eval(env)).collect();
+        let emits: Vec<(&str, Vec<f32>)> = transition
+            .emits
+            .iter()
+            .map(|(name, args)| (name.as_str(), args.iter().map(|a| a.eval(env)).collect()))
+            .collect();
         for ((var, _), value) in transition.sets.iter().zip(values) {
             runtime.vars[*var] = value;
         }
@@ -468,6 +477,9 @@ impl Scene {
                 });
             }
             None => report(StepEvent::Internal { state: &state.name, label: &transition.label }),
+        }
+        for (name, args) in emits {
+            report(StepEvent::Emit { name, args });
         }
     }
 
@@ -700,9 +712,9 @@ impl Compiler {
         Ok(StateDef { name, transitions })
     }
 
-    /// (on TRIGGER [(when cond)] [(set var value)]... [(goto state)])
+    /// (on TRIGGER [(when cond)] [(set var value)]... [(emit name value...)]... [(goto state)])
     fn transition(&self, node: &AstNode) -> ParseResult<Transition> {
-        const USAGE: &str = "usage: (on (press|release action | after seconds) [(when cond)] [(set var value)]... [(goto state)])";
+        const USAGE: &str = "usage: (on (press|release action | after seconds) [(when cond)] [(set var value)]... [(emit name value...)]... [(goto state)])";
         let AstKind::Form { head, args } = &node.kind else {
             return Err(error(node, USAGE));
         };
@@ -731,6 +743,7 @@ impl Compiler {
 
         let mut guard = None;
         let mut sets = Vec::new();
+        let mut emits = Vec::new();
         let mut target = None;
         for clause in &args[1..] {
             match form_parts(clause) {
@@ -745,6 +758,10 @@ impl Compiler {
                     };
                     sets.push((index, self.number(value)?));
                 }
+                Some(("emit", [name, values @ ..])) => {
+                    let values = values.iter().map(|v| self.number(v)).collect::<ParseResult<_>>()?;
+                    emits.push((symbol(name)?.to_string(), values));
+                }
                 Some(("goto", [state])) if target.is_none() => target = Some(self.state_index(state)?),
                 _ => return Err(error(clause, USAGE)),
             }
@@ -754,7 +771,7 @@ impl Compiler {
             return Err(error(node, "(after ...) needs a (goto state)"));
         }
 
-        Ok(Transition { trigger, guard, sets, target, label })
+        Ok(Transition { trigger, guard, sets, emits, target, label })
     }
 }
 

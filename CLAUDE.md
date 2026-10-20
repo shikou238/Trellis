@@ -11,8 +11,10 @@ Rust + wgpu + winit による描画基盤と、ホットリロード可能な独
 ```bash
 cargo run                # 必ずリポジトリのルートで実行（shader.wgsl, pentagon.json, happy-tree.png を相対パスで読むため）
 cargo run --bin parser   # DSLパーサー単体（ASTを出力）
+cargo test --lib         # ui/*.ui を変えたときも回す（同梱のシーンを読み込むテストがある）
 ```
-操作: WASD/矢印=カメラ, R=ホットリロード, Esc=終了
+操作: Space/矢印/Enter/Backspace=UI（キー配置は DESIGN.md §8）, WASD=カメラ, R=ホットリロード, T=計測の開始/中断, Esc=終了
+起動すると「方式A」「方式B」「インスペクタ」の3ウィンドウが開く。`ui/*.ui` は保存すると自動で反映される
 
 ## 守る原則（詳細は PLAN.md §3, §6）
 - **表現の分離**: 書く・保存する形は辞書風（DSL/S式）、実行時は型付きの連続配列。毎フレーム辞書を引かない

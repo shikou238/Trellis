@@ -20,7 +20,7 @@
 (state open
   (on (press down) (set cursor {wrap(cursor + 1, 4)}))
   (on (press up) (set cursor {wrap(cursor - 1, 4)}))
-  (on (press confirm) (set screen cursor) (goto page))
+  (on (press confirm) (set screen cursor) (emit opened cursor) (goto page))
   (on (press cancel) (goto closed))
   (on (press menu) (goto closed)))
 (state page

@@ -32,6 +32,8 @@ enum RowKind {
     Header,
     Error,
     Param(usize),
+    /// 計測結果の i 行目
+    Report(usize),
 }
 
 struct Row {
@@ -40,8 +42,10 @@ struct Row {
     y: f32,
 }
 
-/// 上から順に行を並べる。描画と当たり判定で同じものを使う
-fn layout(scenes: &[SceneSummary]) -> Vec<Row> {
+const REPORT_H: f32 = 20.0;
+
+/// 上から順に行を並べる。描画と当たり判定で同じものを使う。計測結果はいちばん下
+fn layout(scenes: &[SceneSummary], report_len: usize) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut y = PADDING;
     for (scene, summary) in scenes.iter().enumerate() {
@@ -56,6 +60,10 @@ fn layout(scenes: &[SceneSummary]) -> Vec<Row> {
             y += ROW_H;
         }
         y += SCENE_GAP;
+    }
+    for i in 0..report_len {
+        rows.push(Row { scene: 0, kind: RowKind::Report(i), y });
+        y += REPORT_H;
     }
     rows
 }
@@ -85,7 +93,14 @@ pub struct Inspector {
 }
 
 impl Inspector {
-    pub fn build(&self, scenes: &[SceneSummary], width: f32, rects: &mut Vec<RectInstance>, labels: &mut Vec<Label>) {
+    pub fn build(
+        &self,
+        scenes: &[SceneSummary],
+        report: &[String],
+        width: f32,
+        rects: &mut Vec<RectInstance>,
+        labels: &mut Vec<Label>,
+    ) {
         let rect = |x: f32, y: f32, w: f32, h: f32, color: [f32; 4]| RectInstance {
             position: [x, y],
             size: [w, h],
@@ -94,7 +109,16 @@ impl Inspector {
         };
         let track_w = track_width(width);
 
-        for row in layout(scenes) {
+        for row in layout(scenes, report.len()) {
+            if let RowKind::Report(i) = row.kind {
+                labels.push(Label {
+                    text: report[i].clone(),
+                    position: [PADDING, row.y],
+                    size: if i == 0 { 14.0 } else { 12.0 },
+                    color: if i == 0 { [255, 255, 255, 255] } else { [190, 220, 255, 255] },
+                });
+                continue;
+            }
             let summary = &scenes[row.scene];
             match row.kind {
                 RowKind::Header => labels.push(Label {
@@ -131,6 +155,7 @@ impl Inspector {
                         color: [210, 210, 220, 255],
                     });
                 }
+                RowKind::Report(_) => {}
             }
         }
     }
@@ -141,7 +166,7 @@ impl Inspector {
 
     /// クリックした行のパラメータでドラッグを始める。始めたら (ウィンドウ, 名前) を返す
     pub fn press(&mut self, scenes: &[SceneSummary], cursor: [f32; 2]) -> Option<(WindowId, String)> {
-        let row = layout(scenes)
+        let row = layout(scenes, 0)
             .into_iter()
             .find(|row| matches!(row.kind, RowKind::Param(_)) && (row.y..row.y + ROW_H).contains(&cursor[1]))?;
         let RowKind::Param(i) = row.kind else {

@@ -18,10 +18,10 @@
   (on (press menu) (goto open)))
 (state open
   (on (release menu) (goto closed))
-  (on (press up) (set screen 0) (goto page))
-  (on (press right) (set screen 1) (goto page))
-  (on (press down) (set screen 2) (goto page))
-  (on (press left) (set screen 3) (goto page)))
+  (on (press up) (set screen 0) (emit opened 0) (goto page))
+  (on (press right) (set screen 1) (emit opened 1) (goto page))
+  (on (press down) (set screen 2) (emit opened 2) (goto page))
+  (on (press left) (set screen 3) (emit opened 3) (goto page)))
 (state page
   (on (press cancel) (goto closed)))
 

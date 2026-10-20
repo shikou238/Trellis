@@ -13,6 +13,7 @@
   現在は、**DSL で書いた UI（見た目 + ステートマシン）をウィンドウごとに動かし、キーボードで操作できる**ところまでできている。
   ウィンドウ1が方式A（押している間だけ出るメニュー）、ウィンドウ2が方式B（開いて選んで決定するメニュー）。ファイルを保存すると自動でリロードされる。
   ウィンドウ3の**インスペクタ**で、両方のシーンの `defparam` をスライダーで調整でき、離すとソースに書き戻される。
+  シーンのウィンドウで `T` を押すと**計測モード**になり、方式A と方式B を交互に出題して操作を `logs/` に記録し、終わるとインスペクタに集計が出る。
 - チュートリアル由来の 3D シーン（テクスチャ付き五角形 ×100）は残してあり、UI はその上に重ねて描く。「ゲーム画面の上にメニューが出る」状況の背景として使える。
 - **古いファイル**: `src/text.rs` は古い glyphon の API で書かれた未接続のラッパー（`lib.rs` で `// mod text;`）。文字描画は `src/ui/text.rs` で作り直した。
 
@@ -51,7 +52,9 @@ src/
     scene.rs         Scene: DSL → コンパイル済みシーン、ステートマシンの実行（step）、毎フレームの評価。Runtime: 実行時の状態
     renderer.rs      UiRenderer（共有パイプライン）/ UiLayer（ウィンドウ毎のバッファ）/ RectInstance / srgb8()
     text.rs          TextSystem（共有フォント）/ TextLayer（ウィンドウ毎の文字描画）/ Label
-    inspector.rs     Inspector: パラメータのスライダーの配置・描画・ドラッグ
+    inspector.rs     Inspector: パラメータのスライダーの配置・描画・ドラッグ、計測結果の表示
+    session.rs       TestSession: 計測モード（出題・完了判定・ログの書き出し）、TestConfig（ui/tasks.ui）
+    analysis.rs      計測ログの読み込みと集計（Report, TrialRecord, SceneStats）
   ui.wgsl            UI 用 2D 矩形シェーダ（実行時にファイルから読む）
   camera.rs          Camera, CameraUniform, OPENGL_TO_WGPU_MATRIX
   model_instance.rs  ModelInstance / ModelInstanceRaw（3D のインスタンシング用）
@@ -64,6 +67,8 @@ src/
 ui/
   menu_a.ui          ウィンドウ1のシーン（方式A: 押している間だけ出る十字型メニュー）
   menu_b.ui          ウィンドウ2のシーン（方式B: 開いて選んで決定する縦並びメニュー）
+  tasks.ui           計測の設定（交互に試すシーン、試行回数、制限時間、課題）
+logs/                計測のログ（.gitignore 済み。1 回の計測につき 1 ファイル）
 pentagon.json        3D モデルデータ（※中身は JSON ではなく S式）
 happy-tree.png       3D 用ディフューズテクスチャ
 run.html, pkg/       wasm 実行用（wasm-pack 出力。現在は動かない → §9）
@@ -83,6 +88,7 @@ App  (ApplicationHandler<AppView>)              ← OS 依存の層
       ├─ model_instances + model_instance_buffer (10x10 = 100個)
       ├─ ui_renderer: UiRenderer                 (UI: パイプライン + BindGroupLayout)
       ├─ text_system: TextSystem                 (フォント・グリフのキャッシュ。読み込みが重いので共有)
+      ├─ report: Vec<String>                     (直近の計測の集計。インスペクタに出す)
       ├─ inspector: Inspector + inspector_window (ドラッグ中のパラメータ / インスペクタの WindowId)
       └─ windows: Vec<WindowWrapper>             ← ウィンドウ毎のリソース
            ├─ nature: Arc<winit::Window>
@@ -92,6 +98,7 @@ App  (ApplicationHandler<AppView>)              ← OS 依存の層
            ├─ input: InputMapper                 (押されているキー → 操作の押下・解放)
            ├─ scene: Option<ScenePlayer>         (シーン定義 Scene + 実行時状態 tick / Runtime + 入力の待ち行列)
            │                                      None = シーンを動かさないウィンドウ（インスペクタ）
+           ├─ session: Option<TestSession>       (計測中なら Some。計測用に別の ScenePlayer を持ち、scene の代わりに動かす)
            ├─ ui_layer: UiLayer                  (画面サイズ uniform + 矩形インスタンスバッファ)
            ├─ text_layer: TextLayer              (文字のアトラス・描画パイプライン + 今フレームの Label 列)
            └─ background                         (背景色)
@@ -145,6 +152,10 @@ wasm では async を block できないので、生成した `AppView` 自体�
 | `RedrawRequested` | （インスペクタなら先に `AppView::build_inspector`）→ `WindowWrapper::update()` → `render()`。Lost/Outdated なら resize で復旧 |
 | `CursorMoved` | カーソル位置を保持（背景色に使用）。インスペクタなら `AppView::inspector_drag`（ドラッグ中の値を更新） |
 | `MouseInput`（左ボタン, インスペクタのみ） | `AppView::inspector_mouse`: 押したらドラッグ開始、離したらソースに書き戻す |
+| `KeyboardInput` の `T`（リピートは除く） | `AppView::toggle_session`: そのウィンドウで計測を始める / やめる |
+
+`RedrawRequested` のたびに `AppView::collect_finished_sessions` が、終わった計測のログを読んで集計し `report` に入れる。
+計測中のウィンドウでは、キー入力は `scene` ではなく `session` に渡る（`WindowWrapper::queue_inputs`）。
 
 キー入力はフォーカスのあるウィンドウにだけ届くので、2つの方式は**ウィンドウごとに独立して**動く。
 
@@ -161,7 +172,8 @@ wasm では async を block できないので、生成した `AppView` 自体�
 
 update(device, queue, text_system)
   ├─ カメラ更新 → camera_buffer に書き込み
-  ├─ (シーンがあれば)
+  ├─ (計測中なら) session.update(size) → session.build(...)   … シーンの代わりに計測を進めて描く（§5.5）
+  ├─ (そうでなく、シーンがあれば)
   │   ├─ scene.poll_file()    … 200ms ごとにファイルの更新日時を確認し、変わっていればリロード
   │   ├─ scene.advance(size)  … 経過した実時間ぶん tick を進める（1/60 秒の固定ステップ）。
   │   │                          tick ごとに Scene::step（待ち行列の入力は最初の tick でまとめて処理）
@@ -232,6 +244,8 @@ Rust 側で色を作るときは `renderer::srgb8(r, g, b, a)`（0–255 の sRG
 | パス | 読む場所 | 用途 | リロード |
 |---|---|---|---|
 | `ui/menu_a.ui`, `ui/menu_b.ui` | `ScenePlayer::reload` | UI シーン。**インスペクタから書き戻される**（`ScenePlayer::write_param`） | **保存で自動** + `R` |
+| `ui/tasks.ui` | `TestSession::start` | 計測の設定 | `T` で計測を始めるたびに読む |
+| `logs/session-*.log` | `TestSession`（書く）/ `AppView::collect_finished_sessions`（読む） | 計測のログ | — |
 | `src/ui.wgsl` | `UiRenderer::build_pipeline` | UI シェーダ | `R` |
 | `src/shader.wgsl` | `ShaderWrapper::load` | 3D シェーダ | `R` |
 | `pentagon.json` | `AppView::load_model_and_create_buffer` | 3D モデル | `R` |
@@ -275,7 +289,65 @@ Rust 側で色を作るときは `renderer::srgb8(r, g, b, a)`（0–255 の sRG
 - **配置**（`inspector::layout`）: シーンごとに「見出し（パス + 今の状態名）→（エラーがあれば赤字）→ パラメータの行…」を上から並べる。描画と当たり判定で同じ配置を使う。
 - インスペクタはシーンを持たないウィンドウ。中身は `AppView::build_inspector` が毎フレーム作り直す。
 
-### 5.5 3D モデルファイル形式
+### 5.5 計測モード（`ui/session.rs`, `ui/analysis.rs`, `ui/tasks.ui`）
+
+PLAN.md §4.5 の「操作ログ」。触った感覚の違いを、データで分析するためのもの。
+
+**設定**（`ui/tasks.ui`、`T` を押したときに読む）:
+```lisp
+(scenes "ui/menu_a.ui" "ui/menu_b.ui")   ;; 交互に試すシーン
+(trials 20)                             ;; 試行の回数（全シーンの合計）
+(timeout 10)                            ;; 1 試行の制限時間（秒）
+(wait 0.5)                              ;; 試行の間の待ち時間（秒）
+(task "青" (opened 1))                  ;; 画面に出す文字と、完了とみなす通知
+```
+
+**課題と完了判定**: シーン側が遷移で `(emit opened 1)` のような**意味のある通知**を出し、計測側は課題の `(opened 1)` と比べる。
+シーンの中身（変数名・状態名）に依存しないので、十字型と縦並びのように作りが違う方式でも同じ課題を使える。
+- 名前と値が一致 → **完了**（`complete`）
+- 名前が同じで値が違う → **誤操作**（`wrong`。違う画面を開いた）。試行はそこで終わる
+- 制限時間を過ぎた → **時間切れ**（`timeout`）
+- 計測を `T` で途中でやめた → **中断**（`aborted`。集計から除く）
+
+**1 試行の流れ**（`TestSession::step_tick`。決定的で、テストは直接呼ぶ）:
+```
+Waiting: シーンを初期状態に戻して（ScenePlayer::reset）表示。wait 秒の間の入力は捨てる
+   ↓ wait 秒経過 → 課題を乱数で選び、上部に表示（trial 行を記録）
+Running: 入力をシーンに渡し、入力・遷移・無視された押下・通知をログに書く
+   ↓ 完了 / 誤操作 / 時間切れ（trial_end 行を記録）
+次のシーン（交互）で Waiting へ。規定回数に達したら終了（session_end）
+```
+- 計測用に**別の `ScenePlayer`** をシーンごとに持つ（ウィンドウ本来の `scene` は止まる）。1 つのウィンドウで方式を持ち替えるので、操作する場所が変わらない。
+- 時間軸は計測全体で 1 本（`TestSession::tick`）。ログの tick はすべてこれ。
+- 乱数は SplitMix64。シードと最初のシーンはログに残るので、出題順を再現できる。
+- 計測中もファイルの変更は拾う。パラメータが変わったら `param` 行として記録して続ける。
+
+**ログ**（`logs/session-YYYYMMDD-HHMMSS.log`、UTC。S 式で 1 行 1 イベント、書くたびに flush）:
+```lisp
+(session (started "2026-10-20 05:03:00 UTC") (seed 123) (ticks_per_second 60) (config "ui/tasks.ui"))
+(scene 0 (path "ui/menu_a.ui") (source_hash "3f2a...") (params (item_w 190.636) (tilt -9.01) ...))
+(trial 1 (scene 0) (task "青") (expect opened 1) (shown 1203))
+(input 1250 press menu)
+(transition 1250 closed open)
+(ignored 1255 press confirm)
+(input 1262 press right)
+(transition 1262 open page)
+(emit 1262 opened 1)
+(trial_end 1 complete 1262)
+(param 1400 1 item_w 300)
+(session_end 2000)
+```
+- `source_hash` は FNV-1a（Rust のバージョンに依存しない）。同じソースで測ったかを見分ける。
+- 入力を tick つきで全部残しているので、シーンのソース + パラメータ + 入力列から操作を再生できる（再生機能は未実装）。
+
+**集計**（`analysis::analyze`）: ログを DSL と同じパーサーで読み、ログだけから計算する（指標を変えても過去のログで計算し直せる）。
+- 試行ごと: 表示 → 最初の押下（**迷い**）、最初の押下 → 完了（**操作**）、押下数、無視された押下数、キャンセル数、結果。
+- シーンごと: 最初の `WARMUP_TRIALS`（2）回を練習として除き、完了・誤操作・時間切れの数、時間の中央値（完了した試行のみ）、押下などの平均。
+- 結果はインスペクタの一番下に出る（`Report::lines`）。
+
+**最初の版で測っていないもの**: 「入力を受け付けない時間」と「入力から画面が反応するまでの時間」。今の DSL にはアニメーション中に入力を受け付けない仕組みがなく、見た目が落ち着いた時点もログからは分からないため（シーン側の協力が要る）。
+
+### 5.6 3D モデルファイル形式
 
 `Model { vertices: Vec<Vertex>, indices: Vec<u16> }` を serde でシリアライズ。
 - **S式（採用中）**: `save_sexpr_file` / `load_sexpr_file`。`pentagon.json` は拡張子が json だが中身は S式。
@@ -319,7 +391,7 @@ Rust 側で色を作るときは `renderer::srgb8(r, g, b, a)`（0–255 の sRG
   (on (press menu) (set cursor 0) (goto open)))
 (state open
   (on (press down) (set cursor {wrap(cursor + 1, 4)}))    ;; goto なし = 状態はそのまま
-  (on (press confirm) (when {cursor == 2}) (goto closed)) ;; when = 条件
+  (on (press confirm) (when {cursor == 2}) (emit opened cursor) (goto closed)) ;; when = 条件、emit = 意味のある通知
   (on (release menu) (goto closed))
   (on (after 2) (goto closed)))           ;; この状態に入ってから 2 秒後（goto 必須）
 (def top {height / 2 - 120})              ;; 毎フレーム計算される名前付きの値
@@ -344,6 +416,7 @@ Rust 側で色を作るときは `renderer::srgb8(r, g, b, a)`（0–255 の sRG
 - `goto` すると `state_time` が 0 に戻る。自分自身への `goto` でも戻る。`goto` のない遷移では戻らない。
 - `after` に `goto` がないとコンパイルエラーになる（条件を満たしている間、毎 tick 発火してしまうため）。
 - どの遷移にも当てはまらなかった**押下**は「無視された入力」として報告する（解放は報告しない）。
+- `(emit 名前 値...)` の値は `set` と同じく遷移前の環境で評価し、遷移の報告の後に `StepEvent::Emit` として報告する。計測の完了判定に使う（§5.5）。
 
 **名前の解決規則**:
 - `defparam` / `var` / `state` は1周目で集めるので、**ファイル内のどこからでも参照できる**。
@@ -355,7 +428,7 @@ Rust 側で色を作るときは `renderer::srgb8(r, g, b, a)`（0–255 の sRG
 - スロットの並び: `[time, width, height, state_time, パラメータ..., 変数..., 状態フラグ..., def...]`。
 - 評価のたびに `Scene::fill_env` で f32 の配列を作り（def は順に評価して追加）、`CExpr::eval` は配列を引くだけ。
 
-**StepEvent**: `step` は起きたこと（遷移・goto のない遷移・無視された入力）を `StepEvent` としてコールバックに渡す。いまは `ScenePlayer` が tick 番号つきで `log::info!` に出しているだけ。操作ログ（PLAN.md §4.5）はここに記録処理を足して作る。
+**StepEvent**: `step` は起きたこと（遷移・goto のない遷移・無視された入力・通知）を `StepEvent` としてコールバックに渡す。普段は `ScenePlayer::advance` が `log::info!` に出すだけで、計測中は `TestSession` が受け取ってログファイルに書く（`ScenePlayer::step_tick` に渡すコールバック）。
 
 **Param**: 型・最小・最大・刻みと、既定値リテラルの位置（`value_span`）を持つ。インスペクタのスライダーとソースへの書き戻しに使う（§5.4）。値は `Scene` の中にあり、ドラッグ中は `ScenePlayer::set_param` が直接書き換える（リロードするとファイルの値に戻る）。
 
@@ -374,7 +447,7 @@ Rust 側で色を作るときは `renderer::srgb8(r, g, b, a)`（0–255 の sRG
 ```bash
 cargo run                  # ネイティブ。リポジトリ直下で実行すること（相対パス読込のため）
 cargo run --bin parser     # DSL パーサー単体（AST を Debug 出力）
-cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.ui を読み込んで操作の流れを試すテスト、書き戻しのテストを含む）
+cargo test --lib           # input / ui::scene / ui::session / ui::analysis のテスト（同梱の ui/*.ui で操作の流れや計測を試すテストを含む）
 ```
 
 **キー配置**（`input.rs` の `action_for_key`）:
@@ -387,6 +460,7 @@ cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.u
 | Backspace / X | `cancel` |
 | WASD | 3D カメラ |
 | R | 全体のホットリロード |
+| T | そのウィンドウで計測を始める / やめる |
 | Esc | 終了 |
 
 **2つのメニュー方式**（操作したいウィンドウをクリックしてフォーカスしてから）:
@@ -399,6 +473,9 @@ cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.u
 
 画面は4色（赤・青・緑・黄）で区別し、両方式で同じ遷移アニメーション（`page_time`）にしてある。
 `ui/*.ui` は保存するだけで反映される。マウス移動で背景色が変わるのは、シーンが `background` を指定していないときだけ。
+
+**計測**: 方式A か方式B のウィンドウで `T` を押す。上部に課題の色（赤・青・緑・黄）が出るので、その画面を開く。方式は試行ごとに交互に切り替わる。
+`ui/tasks.ui` の回数に達するか、もう一度 `T` を押すと終わり、ウィンドウは普段の表示に戻る。集計はインスペクタの一番下に出る。
 
 **インスペクタ**（ウィンドウ3）: 両シーンの `defparam` がスライダーとして並ぶ。左ボタンでドラッグすると即座に反映され、離すと `.ui` ファイルに書き戻される。
 範囲のあるパラメータはつまみの位置が値、範囲のないものは左右のドラッグ量で増減する。見出しには今の状態名、シーンにエラーがあれば赤字でエラーが出る。
@@ -430,13 +507,19 @@ cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.u
 | 19 | インスペクタはスクロールできない。パラメータが多いとウィンドウからはみ出す | `ui/inspector.rs` | 必要になったら対応 |
 | 20 | インスペクタの当たり判定・ドラッグにはテストがない（`WindowId` をテストで作りにくいため）。書き戻し・丸め・書式は `Scene` / `Param` のテストで確認している | `ui/inspector.rs` | 未対応 |
 | 21 | 範囲のないパラメータの、1 ピクセルあたりの変化量（`Int` 0.25 / `Float` 値の 1/200）は仮の値 | `Inspector::value_at` | 触って調整する |
+| 22 | 計測の入力の時刻はフレーム単位（#11 と同じ。1 フレームで溜まった入力は同じ tick になる）。迷い・操作の時間も 1/60 秒単位 | `TestSession::step_tick` | 精密な時刻が要るなら入力に時刻を持たせる |
+| 23 | 計測の「入力を受け付けない時間」「反応までの時間」は未計測（§5.5） | — | シーン側に「操作中」を宣言させる仕組みが要る |
+| 24 | `TestSession::start`（設定の読み込み・ログファイルの作成）と `T` キー・集計の表示は、手動でしか確認していない。出題・判定・ログ・集計はテストあり | `ui/session.rs`, `appview.rs` | — |
+| 25 | 課題の表示位置・サイズは固定（上部の帯、40px）。右上の進み具合の表示は、ウィンドウが狭いとはみ出す | `TestSession::build` | 必要になったら調整 |
 
 ## 10. 次の段階（PLAN.md §4.6）
 
-1. **操作ログ**: `StepEvent` を tick つきで記録し、方式ごとに集計する（操作完了までの時間、手数、無視された入力、待たされた時間など。PLAN.md §4.5）。操作の目的（「青の画面を開く」など）を与える仕組みも要る。集計結果はインスペクタに文字で出せる。
-2. 必要になったら: 記録した入力の再生、ログのタイムライン表示、シーンの DSL から文字を出す機能（`(text ...)`）、シーン間で共通部分を共有する仕組み、インスペクタのスクロール。
-
-ツール自体の UI は**自作する**と決めた（PLAN.md §7 の未決定事項のうち1つ。インスペクタは別ウィンドウ）。
+PLAN.md §4.6 の 1〜3（2 つの方式・スライダーとホットリロード・操作ログと集計）は実装済み。この先は必要になったものから:
+- 実際に計測して、方式の違いを分析する（ツールを使う段階）
+- 記録した入力の再生、ログのタイムライン表示
+- 「入力を受け付けない時間」「反応までの時間」の計測（シーン側に「操作中」を宣言させる）
+- シーンの DSL から文字を出す機能（`(text ...)`）、シーン間で共通部分を共有する仕組み、インスペクタのスクロール
+- 将来ほかの人に計測してもらうとき: 課題の説明、練習用の試行、参加者ごとのログ、集計の書き出し
 
 ## 11. Claude 向け作業メモ
 
@@ -449,5 +532,7 @@ cargo test --lib           # input と ui::scene のテスト（同梱の ui/*.u
 - 実行時の状態は `Runtime` に置き、`Scene` には置かない（リロードで消えないように）。状態を足したら `Scene::adopt` で引き継ぎ方を決める。
 - `ui/*.ui` を変えたら `cargo test --lib` を回す（同梱のシーンを読み込むテストがある）。
 - ウィンドウをまたぐ処理（あるウィンドウの操作で別のウィンドウのシーンを変える）は `AppView` に置き、相手は `WindowId` で指定する。
-- Rust 側で UI を描くときは、矩形は `RectInstance`（色は `srgb8`）、文字は `Label` を `ui_layer.instances` / `text_layer.labels` に詰める（インスペクタが例）。
+- Rust 側で UI を描くときは、矩形は `RectInstance`（色は `srgb8`）、文字は `Label` を `ui_layer.instances` / `text_layer.labels` に詰める（インスペクタと計測モードが例）。
+- 計測のログの形式を変えたら、`ui/analysis.rs` の読み込みと §5.5 の例も直す。ログは集計の唯一の材料なので、記録できる情報は捨てずに書く。
+- 計測の判定はシーンの中身を見ずに `emit` の通知だけで行う。新しい課題は `ui/tasks.ui` に、必要な通知はシーン側の遷移に足す。
 - コメントは日本語と英語が混在（チュートリアル由来の英語コメントはそのまま残っている）。

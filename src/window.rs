@@ -13,6 +13,7 @@ use wgpu::util::DeviceExt;
 use crate::texture::TextureWrapper;
 use crate::input::InputMapper;
 use crate::ui::ScenePlayer;
+use crate::ui::session::TestSession;
 use crate::ui::renderer::{UiLayer, UiRenderer};
 use crate::ui::text::{TextLayer, TextSystem};
 pub struct WindowWrapper{
@@ -32,6 +33,8 @@ pub struct WindowWrapper{
     pub scene: Option<ScenePlayer>,
     pub ui_layer: UiLayer,
     pub text_layer: TextLayer,
+    /// 計測中なら Some。計測中はシーンの代わりにこちらを動かして描く
+    pub session: Option<TestSession>,
     input: InputMapper,
     /// 背景色（線形 RGBA）。None ならカーソル位置の色
     pub background: Option<[f32; 4]>,
@@ -126,6 +129,7 @@ impl WindowWrapper {
             scene: scene_path.map(ScenePlayer::new),
             ui_layer: UiLayer::new(device, ui_renderer),
             text_layer: TextLayer::new(device, queue, text_system),
+            session: None,
             input: InputMapper::default(),
             background: None,
         }
@@ -148,17 +152,21 @@ impl WindowWrapper {
 
         let mut inputs = Vec::new();
         self.input.key(code, is_pressed, repeat, &mut inputs);
-        if let Some(scene) = &mut self.scene {
-            scene.queue_inputs(&inputs);
+        self.queue_inputs(&inputs);
+    }
+    /// 計測中なら計測に、そうでなければシーンに入力を渡す
+    fn queue_inputs(&mut self, inputs: &[crate::input::InputEvent]) {
+        if let Some(session) = self.session.as_mut().filter(|s| !s.is_finished()) {
+            session.queue_inputs(inputs);
+        } else if let Some(scene) = &mut self.scene {
+            scene.queue_inputs(inputs);
         }
     }
     /// フォーカスを失うとキーの解放が届かないので、押されているものをすべて離す
     pub fn focus_lost(&mut self) {
         let mut inputs = Vec::new();
         self.input.release_all(&mut inputs);
-        if let Some(scene) = &mut self.scene {
-            scene.queue_inputs(&inputs);
-        }
+        self.queue_inputs(&inputs);
     }
     pub fn scale_factor(&self) -> f32 {
         self.nature.scale_factor() as f32
@@ -180,7 +188,12 @@ impl WindowWrapper {
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
 
         let logical_size = self.logical_size();
-        if let Some(scene) = &mut self.scene {
+        if let Some(session) = self.session.as_mut().filter(|s| !s.is_finished()) {
+            session.update(logical_size);
+            self.ui_layer.instances.clear();
+            self.text_layer.labels.clear();
+            self.background = session.build(logical_size, &mut self.ui_layer.instances, &mut self.text_layer.labels);
+        } else if let Some(scene) = &mut self.scene {
             scene.poll_file();
             scene.advance(logical_size);
             self.ui_layer.instances.clear();

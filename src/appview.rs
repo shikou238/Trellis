@@ -14,6 +14,9 @@ use crate::model_instance::{ModelInstance, ModelInstanceRaw};
 
 use cgmath::prelude::*;
 use crate::ui::ScenePlayer;
+use crate::ui::analysis;
+use crate::ui::session::TestSession;
+use crate::{assets, parser};
 use crate::ui::inspector::{self, Inspector, SceneSummary};
 use crate::ui::renderer::{UiRenderer, srgb8};
 use crate::ui::text::TextSystem;
@@ -37,6 +40,8 @@ pub struct AppView {
     inspector: Inspector,
     /// パラメータを並べるウィンドウ（シーンは動かさない）
     inspector_window: Option<WindowId>,
+    /// 直近の計測の集計（インスペクタに出す行）
+    report: Vec<String>,
 }
 
 impl AppView {
@@ -191,6 +196,7 @@ impl AppView {
             text_system,
             inspector: Inspector::default(),
             inspector_window: inspector_id,
+            report: Vec::new(),
         })
     }
     fn reconstruct_render_pipeline(&mut self) -> anyhow::Result<()> {
@@ -326,12 +332,54 @@ impl AppView {
         let width = self.windows[index].logical_size()[0];
         let mut rects = Vec::new();
         let mut labels = Vec::new();
-        self.inspector.build(&Self::scene_summaries(&self.windows), width, &mut rects, &mut labels);
+        self.inspector.build(&Self::scene_summaries(&self.windows), &self.report, width, &mut rects, &mut labels);
 
         let window = &mut self.windows[index];
         window.ui_layer.instances = rects;
         window.text_layer.labels = labels;
         window.background = Some(srgb8(inspector::BACKGROUND[0], inspector::BACKGROUND[1], inspector::BACKGROUND[2], 255));
+    }
+
+    /// T キー: そのウィンドウで計測を始める。計測中ならやめる
+    pub fn toggle_session(&mut self, window_id: WindowId) {
+        let Some(window) = self.windows.iter_mut().find(|w| w.nature.id() == window_id && w.scene.is_some()) else {
+            return;
+        };
+        match &mut window.session {
+            Some(session) if !session.is_finished() => session.finish(),
+            _ => match TestSession::start() {
+                Ok(session) => {
+                    log::info!("session started: {}", session.log_path());
+                    self.report = vec![format!("計測中: {}", session.log_path())];
+                    window.session = Some(session);
+                }
+                Err(e) => {
+                    log::error!("could not start session: {:#}", e);
+                    self.report = vec![format!("計測を始められません: {:#}", e)];
+                }
+            },
+        }
+        self.collect_finished_sessions();
+    }
+
+    /// 終わった計測のログを読み込んで集計する（毎フレーム呼んでよい）
+    pub fn collect_finished_sessions(&mut self) {
+        for window in &mut self.windows {
+            if !window.session.as_ref().is_some_and(|s| s.is_finished()) {
+                continue;
+            }
+            let path = window.session.take().unwrap().log_path().to_string();
+            let result = assets::read_to_string(&path).and_then(|log| {
+                analysis::analyze(&log).map_err(|e| {
+                    let (line, col) = parser::line_col(&log, e.span.start);
+                    anyhow::anyhow!("{}:{}:{}: {}", path, line, col, e.message)
+                })
+            });
+            self.report = match result {
+                Ok(report) => std::iter::once(format!("計測結果: {}", path)).chain(report.lines()).collect(),
+                Err(e) => vec![format!("集計できません: {:#}", e)],
+            };
+        }
     }
 
     fn inspector_cursor(&self) -> Option<([f32; 2], f32)> {
