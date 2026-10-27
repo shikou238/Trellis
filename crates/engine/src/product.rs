@@ -4,8 +4,8 @@
 use winit::{keyboard::KeyCode, window::WindowId};
 
 use crate::input::InputEvent;
-use crate::ui::renderer::RectInstance;
-use crate::ui::text::Label;
+use crate::renderer::RectInstance;
+use crate::text::Label;
 
 /// 全ウィンドウで共有する GPU の入口。製品が自分の描画パイプラインを作るときに使う
 pub struct Gpu {

@@ -502,6 +502,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "dsl"
+version = "0.1.0"
+
+[[package]]
+name = "engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytemuck",
+ "cgmath",
+ "console_error_panic_hook",
+ "console_log",
+ "env_logger",
+ "glyphon",
+ "image",
+ "lexpr",
+ "log",
+ "pollster",
+ "serde",
+ "serde-lexpr",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "wgpu",
+ "winit",
+]
+
+[[package]]
 name = "env_logger"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -949,29 +976,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
-name = "learn-wgpu2"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytemuck",
- "cgmath",
- "console_error_panic_hook",
- "console_log",
- "env_logger",
- "glyphon",
- "image",
- "lexpr",
- "log",
- "pollster",
- "serde",
- "serde-lexpr",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu",
- "winit",
-]
-
-[[package]]
 name = "lexpr"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1092,6 +1096,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "714098028fe011992e1c3962653c96b2d578c4b4bce9036e15ff220319b1e0e3"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "menu-proto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dsl",
+ "engine",
+ "log",
+ "uikit",
 ]
 
 [[package]]
@@ -2146,6 +2161,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
+]
+
+[[package]]
+name = "uikit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dsl",
+ "engine",
+ "log",
 ]
 
 [[package]]

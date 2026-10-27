@@ -1,0 +1,10 @@
+[package]
+name = "dsl"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[[bin]]
+name = "parser"
+path = "src/bin/parser.rs"

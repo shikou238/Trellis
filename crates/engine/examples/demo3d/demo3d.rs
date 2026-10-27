@@ -3,13 +3,14 @@
 
 use cgmath::prelude::*;
 use wgpu::util::DeviceExt;
-use winit::{keyboard::KeyCode, window::WindowId};
+use engine::Gpu;
+use engine::texture::{self, TextureWrapper};
+use engine::wgpu;
+use engine::winit::{keyboard::KeyCode, window::WindowId};
 
 use crate::camera;
 use crate::model_instance::{ModelInstance, ModelInstanceRaw};
-use crate::product::Gpu;
 use crate::shader::ShaderWrapper;
-use crate::texture::{self, TextureWrapper};
 use crate::vertex::{self, Vertex};
 
 const MODEL_PATH: &str = "pentagon.json";
@@ -205,7 +206,7 @@ impl Demo3d {
             bind_group_layouts: &shader_wrapper.bind_group_layouts.iter().collect::<Vec<_>>(),
             immediate_size: 0,
         });
-        crate::shader::capture_validation(device, || device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        engine::shader::capture_validation(device, || device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {

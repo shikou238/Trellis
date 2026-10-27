@@ -326,7 +326,10 @@ UI ツール、ゲーム本体、作曲ソフトと製品が増えていく。�
 | `uikit` | `ui/scene.rs`（シーン DSL）、`ui/inspector.rs`（インスペクタと書き戻し） | 個々の製品 |
 | `menu-proto` | メニュー試作の `main`、`ui/session.rs`、`ui/analysis.rs`（計測モード）、`ui/*.ui`。UI ツール自体を試す場所として残す | ゲーム、作曲ソフト |
 
-- learn-wgpu の名残（`camera.rs`、`model_instance.rs`、`pentagon.json`、`happy-tree.png`、古い `text.rs`）は、分割のときに消すか、`engine` の外の見本に移す。どちらにするかは分割の作業中に決める
+- learn-wgpu の名残の扱い（分割のときに決めた）:
+  - 古い `text.rs`（未接続）は消した
+  - 3D（`camera.rs`、`model_instance.rs`、`vertex.rs`、3D 用の `ShaderWrapper`、`shader.wgsl`、`pentagon.json`、`happy-tree.png`）は `crates/engine/examples/demo3d/` の見本に移した。「製品が `Product::render` で自分の描画パスを足す」ことの動く見本になり、ゲーム本体で 3D を始めるときの下敷きになるため。`engine` 本体は 3D を知らない
+  - そのためメニュー試作のウィンドウには 3D の五角形が出なくなり、WASD のカメラもなくなった
 - `engine` は製品を知らないので、**製品側が実装する trait** を 1 つ用意する（`update`、`render`、入力を受け取る、くらい）。今 `AppView` が `ScenePlayer` などを直接呼んでいる部分を、その trait 越しに呼ぶ
 
 ### 9.3 進め方

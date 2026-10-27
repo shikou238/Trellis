@@ -1,0 +1,11 @@
+[package]
+name = "menu-proto"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dsl.workspace = true
+engine.workspace = true
+uikit.workspace = true
+anyhow.workspace = true
+log.workspace = true

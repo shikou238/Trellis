@@ -1,17 +1,14 @@
-//! UI シーン（DSL）の読み込み・ホットリロード・実行。
+//! UI シーン（DSL）の読み込み・ホットリロード・実行と、パラメータのインスペクタ。個々の製品は知らない
 
-pub mod analysis;
 pub mod inspector;
-pub mod renderer;
 pub mod scene;
-pub mod session;
-pub mod text;
 
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::input::InputEvent;
-use crate::{assets, parser};
-use renderer::RectInstance;
+use dsl::parser;
+use engine::assets;
+use engine::input::InputEvent;
+use engine::renderer::RectInstance;
 use scene::{Runtime, Scene, StepEvent};
 
 /// 固定タイムステップ（決定性のため、時間は tick 数から求める）

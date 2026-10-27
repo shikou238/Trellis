@@ -1,17 +1,16 @@
 //! メニュー試作: 方式A・方式B のシーンを 1 つずつ動かすウィンドウと、インスペクタのウィンドウ。
-//! T キーで計測モード（`ui/session.rs`）。
+//! T キーで計測モード（`session.rs`）。
 
-use winit::{keyboard::KeyCode, window::WindowId};
+use dsl::parser;
+use engine::input::InputEvent;
+use engine::renderer::srgb8;
+use engine::winit::{keyboard::KeyCode, window::WindowId};
+use engine::{Frame, Gpu, Pointer, PointerKind, Product, WindowSpec, assets};
+use uikit::ScenePlayer;
+use uikit::inspector::{self, Inspector, SceneSummary};
 
-use crate::demo3d::Demo3d;
-use crate::input::InputEvent;
-use crate::product::{Frame, Gpu, Pointer, PointerKind, Product, WindowSpec};
-use crate::ui::ScenePlayer;
-use crate::ui::analysis;
-use crate::ui::inspector::{self, Inspector, SceneSummary};
-use crate::ui::renderer::srgb8;
-use crate::ui::session::TestSession;
-use crate::{assets, parser};
+use crate::analysis;
+use crate::session::TestSession;
 
 /// ウィンドウ i に読み込む UI シーン
 const SCENE_PATHS: [&str; 2] = ["ui/menu_a.ui", "ui/menu_b.ui"];
@@ -36,7 +35,6 @@ struct SceneWindow {
 pub struct MenuProto {
     /// 並び順はウィンドウを開いた順（インスペクタの表示順になる）
     scenes: Vec<SceneWindow>,
-    demo3d: Demo3d,
     inspector: Inspector,
     /// パラメータを並べるウィンドウ（シーンは動かさない）
     inspector_window: Option<WindowId>,
@@ -46,20 +44,15 @@ pub struct MenuProto {
 
 impl MenuProto {
     /// `windows` は `window_specs` の順。シーンより多ければ次の 1 つをインスペクタにする
-    pub fn new(gpu: &Gpu, windows: &[WindowId]) -> anyhow::Result<Self> {
-        let mut demo3d = Demo3d::new(gpu)?;
+    pub fn new(_gpu: &Gpu, windows: &[WindowId]) -> anyhow::Result<Self> {
         let scene_count = windows.len().min(SCENE_PATHS.len());
         let scenes = windows[..scene_count]
             .iter()
             .zip(SCENE_PATHS)
-            .map(|(&id, path)| {
-                demo3d.add_window(gpu, id);
-                SceneWindow { id, scene: ScenePlayer::new(path), session: None }
-            })
+            .map(|(&id, path)| SceneWindow { id, scene: ScenePlayer::new(path), session: None })
             .collect();
         Ok(Self {
             scenes,
-            demo3d,
             inspector: Inspector::default(),
             inspector_window: windows.get(scene_count).copied(),
             report: Vec::new(),
@@ -146,7 +139,6 @@ impl Product for MenuProto {
         if code == KeyCode::KeyT && pressed && !repeat {
             self.toggle_session(window);
         }
-        self.demo3d.key(window, code, pressed);
     }
 
     /// 計測中なら計測に、そうでなければシーンに入力を渡す
@@ -188,14 +180,13 @@ impl Product for MenuProto {
         }
     }
 
-    fn reload(&mut self, gpu: &Gpu) {
-        self.demo3d.reload(gpu);
+    fn reload(&mut self, _gpu: &Gpu) {
         for window in &mut self.scenes {
             window.scene.reload();
         }
     }
 
-    fn update(&mut self, gpu: &Gpu, frame: &mut Frame) {
+    fn update(&mut self, _gpu: &Gpu, frame: &mut Frame) {
         self.collect_finished_sessions();
         let size = frame.logical_size;
         if Some(frame.window) == self.inspector_window {
@@ -204,7 +195,6 @@ impl Product for MenuProto {
             frame.background = Some(srgb8(r, g, b, 255));
             return;
         }
-        self.demo3d.update(gpu, frame.window, size);
         let Some(window) = self.scene_window(frame.window) else {
             return;
         };
@@ -219,18 +209,72 @@ impl Product for MenuProto {
         }
     }
 
-    fn render(&self, window: WindowId, render_pass: &mut wgpu::RenderPass) {
-        // 3D はシーンを動かすウィンドウにだけ描く（インスペクタには描かない）
-        self.demo3d.render(window, render_pass);
-    }
-
     /// シーンを動かすウィンドウが残っていなければ終了する
     fn window_closed(&mut self, window: WindowId) -> bool {
         self.scenes.retain(|w| w.id != window);
-        self.demo3d.remove_window(window);
         if self.inspector_window == Some(window) {
             self.inspector_window = None;
         }
         self.scenes.is_empty()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use engine::input::{Action, Edge, InputEvent};
+    use uikit::scene::{Runtime, Scene};
+
+    const SIZE: [f32; 2] = [800.0, 600.0];
+
+    fn compile(source: &str) -> Scene {
+        Scene::compile(source).unwrap_or_else(|e| panic!("{} at {:?}", e, dsl::parser::line_col(source, e.span.start)))
+    }
+
+    fn press(action: Action) -> InputEvent {
+        InputEvent { action, edge: Edge::Press }
+    }
+
+    fn release(action: Action) -> InputEvent {
+        InputEvent { action, edge: Edge::Release }
+    }
+
+    fn step(scene: &Scene, runtime: &mut Runtime, tick: u64, inputs: &[InputEvent]) {
+        scene.step(runtime, tick, inputs, SIZE, &mut Vec::new(), &mut |_| {});
+    }
+
+    fn state_name<'a>(scene: &'a Scene, runtime: &Runtime) -> &'a str {
+        scene.state_name(runtime).unwrap()
+    }
+
+    /// 同梱のシーンファイルが壊れていないこと、主な操作の流れが想定どおりであること
+    #[test]
+    fn bundled_menu_a_hold_and_direction() {
+        let scene = compile(include_str!("../ui/menu_a.ui"));
+        let mut rt = scene.adopt(None, 0);
+        // 押してすぐ離すと何も開かない
+        step(&scene, &mut rt, 1, &[press(Action::Menu)]);
+        step(&scene, &mut rt, 2, &[release(Action::Menu)]);
+        assert_eq!(state_name(&scene, &rt), "closed");
+        // 押したまま右 → 画面1
+        step(&scene, &mut rt, 3, &[press(Action::Menu)]);
+        step(&scene, &mut rt, 4, &[press(Action::Right)]);
+        step(&scene, &mut rt, 5, &[release(Action::Menu)]);
+        assert_eq!((state_name(&scene, &rt), rt.vars()[0]), ("page", 1.0));
+        step(&scene, &mut rt, 6, &[press(Action::Cancel)]);
+        assert_eq!(state_name(&scene, &rt), "closed");
+    }
+
+    #[test]
+    fn bundled_menu_b_select_and_confirm() {
+        let scene = compile(include_str!("../ui/menu_b.ui"));
+        let mut rt = scene.adopt(None, 0);
+        step(&scene, &mut rt, 1, &[press(Action::Menu), release(Action::Menu)]);
+        step(&scene, &mut rt, 2, &[press(Action::Up)]); // 0 → 3（折り返し）
+        step(&scene, &mut rt, 3, &[press(Action::Up), press(Action::Confirm)]);
+        assert_eq!(state_name(&scene, &rt), "page");
+        assert_eq!(rt.vars(), vec![2.0, 2.0]); // cursor, screen
+        step(&scene, &mut rt, 4, &[press(Action::Cancel)]);
+        assert_eq!(state_name(&scene, &rt), "open");
+    }
+
 }

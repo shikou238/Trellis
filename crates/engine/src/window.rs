@@ -6,8 +6,8 @@ use crate::hsv_to_rgb;
 use crate::input::{InputEvent, InputMapper};
 use crate::product::{Frame, Gpu, Product};
 use crate::texture::TextureWrapper;
-use crate::ui::renderer::{UiLayer, UiRenderer};
-use crate::ui::text::{TextLayer, TextSystem};
+use crate::renderer::{UiLayer, UiRenderer};
+use crate::text::{TextLayer, TextSystem};
 
 pub struct WindowWrapper{
     pub nature: Arc<Window>,

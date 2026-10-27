@@ -5,8 +5,8 @@ use std::sync::Arc;
 use winit::window::{Window, WindowId};
 
 use crate::product::Gpu;
-use crate::ui::renderer::UiRenderer;
-use crate::ui::text::TextSystem;
+use crate::renderer::UiRenderer;
+use crate::text::TextSystem;
 
 /// 全ウィンドウで共有する GPU リソースとウィンドウの一覧。製品の中身は知らない
 pub struct AppView {

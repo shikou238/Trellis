@@ -1,0 +1,34 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+bytemuck = { version = "1.24", features = [ "derive" ] }
+winit = { version = "0.30", features = ["android-native-activity"] }
+env_logger = "0.10"
+wgpu = "28.0"
+pollster = "0.3"
+glyphon = "0.10.0"
+
+[dependencies.image]
+version = "0.24"
+default-features = false
+features = ["png", "jpeg"]
+
+[dev-dependencies]
+# examples/demo3d（learn-wgpu チュートリアル由来の 3D の見本）だけが使う
+cgmath = "0.18"
+serde = { version = "1.0", features = ["derive"] }
+lexpr = "=0.2.7"
+serde-lexpr = "=0.1.3"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+console_error_panic_hook = "0.1.6"
+console_log = "1.0"
+wgpu = { version = "28.0", features = ["webgl"] }
+# wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4.30"
+web-sys = { version = "0.3", features = ["Document", "Window", "Element"] }

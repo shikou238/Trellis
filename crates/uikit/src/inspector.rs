@@ -2,11 +2,11 @@
 //! 各シーンの `defparam` をスライダーとして並べる。ドラッグ中はメモリ上の値だけ変え、離したらソースに書き戻す。
 //! 座標はすべて論理ピクセル。
 
-use winit::window::WindowId;
+use engine::renderer::{RectInstance, srgb8};
+use engine::text::Label;
+use engine::winit::window::WindowId;
 
-use crate::ui::renderer::{RectInstance, srgb8};
-use crate::ui::scene::{Param, ParamKind};
-use crate::ui::text::Label;
+use crate::scene::{Param, ParamKind};
 
 /// インスペクタに並べる1シーン分の情報
 pub struct SceneSummary<'a> {

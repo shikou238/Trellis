@@ -2,7 +2,7 @@
 //! ログ（S式、1行1イベント）を DSL と同じパーサーで読み、試行ごとの値とシーンごとの統計を出す。
 //! 集計はログだけから計算するので、指標を足したり変えたりしても過去のログから計算し直せる。
 
-use crate::parser::{self, AstKind, AstNode, ParseError, ParseResult};
+use dsl::parser::{self, AstKind, AstNode, ParseError, ParseResult};
 
 /// シーンごとに最初の何回を練習として集計から外すか
 pub const WARMUP_TRIALS: usize = 2;
@@ -120,7 +120,7 @@ fn mean(values: impl Iterator<Item = f32>) -> Option<f32> {
 
 pub fn analyze(log: &str) -> ParseResult<Report> {
     let nodes = parser::parse(log)?;
-    let mut ticks_per_second = super::TICKS_PER_SECOND as f32;
+    let mut ticks_per_second = uikit::TICKS_PER_SECOND as f32;
     let mut scene_paths: Vec<(usize, String)> = Vec::new();
     let mut trials: Vec<TrialRecord> = Vec::new();
     // 終わっていない試行（最後の要素）にだけイベントを数える

@@ -15,14 +15,14 @@
 
 use std::io::Write;
 
-use crate::input::{Edge, InputEvent};
-use crate::parser::{self, AstKind, AstNode, ParseError, ParseResult};
-use crate::ui::analysis::{TrialResult, quote};
-use crate::ui::renderer::{RectInstance, srgb8};
-use crate::ui::scene::StepEvent;
-use crate::ui::text::Label;
-use crate::ui::{FixedClock, ScenePlayer, TICKS_PER_SECOND};
-use crate::assets;
+use engine::input::{Edge, InputEvent};
+use dsl::parser::{self, AstKind, AstNode, ParseError, ParseResult};
+use crate::analysis::{TrialResult, quote};
+use engine::renderer::{RectInstance, srgb8};
+use uikit::scene::StepEvent;
+use engine::text::Label;
+use engine::assets;
+use uikit::{FixedClock, ScenePlayer, TICKS_PER_SECOND};
 
 pub const CONFIG_PATH: &str = "ui/tasks.ui";
 
@@ -421,8 +421,8 @@ fn utc_readable(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::Action;
-    use crate::ui::analysis;
+    use crate::analysis;
+    use engine::input::Action;
     use std::cell::RefCell;
     use std::rc::Rc;
 
@@ -452,7 +452,7 @@ mod tests {
 
     #[test]
     fn compiles_config() {
-        let config = TestConfig::compile(include_str!("../../ui/tasks.ui")).unwrap();
+        let config = TestConfig::compile(include_str!("../ui/tasks.ui")).unwrap();
         assert_eq!(config.scenes, vec!["ui/menu_a.ui", "ui/menu_b.ui"]);
         assert_eq!(config.tasks.len(), 4);
         assert_eq!(config.tasks[1].expect_args, vec![1.0]);
@@ -468,7 +468,7 @@ mod tests {
     /// 両方式で課題どおりに操作し、ログから集計できること
     #[test]
     fn runs_trials_on_both_scenes_and_logs_them() {
-        let mut config = TestConfig::compile(include_str!("../../ui/tasks.ui")).unwrap();
+        let mut config = TestConfig::compile(include_str!("../ui/tasks.ui")).unwrap();
         config.trials = 8;
         config.wait = 0.1;
         let buffer = SharedBuffer::default();
@@ -516,7 +516,7 @@ mod tests {
 
     #[test]
     fn wrong_screen_and_timeout_end_the_trial() {
-        let mut config = TestConfig::compile(include_str!("../../ui/tasks.ui")).unwrap();
+        let mut config = TestConfig::compile(include_str!("../ui/tasks.ui")).unwrap();
         config.scenes = vec!["ui/menu_b.ui".into()];
         config.trials = 2;
         config.wait = 0.0;

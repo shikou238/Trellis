@@ -6,7 +6,8 @@ use wgpu::util::DeviceExt;
 
 use crate::{assets, shader, texture::TextureWrapper};
 
-const SHADER_PATH: &str = "src/ui.wgsl";
+/// 製品のリポジトリから動かしても見つかるように、このクレートの場所から引く
+const SHADER_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/ui.wgsl");
 
 /// sRGB（0–1）→ 線形。サーフェスが sRGB なので、色は線形にしてから渡す
 pub fn srgb_to_linear(c: f32) -> f32 {

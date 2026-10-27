@@ -1,7 +1,7 @@
 //! DSL パーサー単体の動作確認用。
-//! `cargo run --bin parser [ファイル]` でファイルを、引数なしなら下のサンプルをパースして AST を表示する。
+//! `cargo run -p dsl --bin parser [ファイル]` でファイルを、引数なしなら下のサンプルをパースして AST を表示する。
 
-use learn_wgpu2::parser;
+use dsl::parser;
 
 const SAMPLE: &str = r#"
         (defparam s 100 (Int 0 100 _))

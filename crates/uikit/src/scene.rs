@@ -24,10 +24,10 @@
 //! 関数: sin cos abs floor min max clamp lerp wrap select smoothstep
 //! 操作の名前: menu up down left right confirm cancel
 
-use crate::input::{Action, Edge, InputEvent};
-use crate::parser::{self, AstKind, AstNode, BinaryOp, Expr, ParseError, ParseResult, Span, UnaryOp};
-use crate::ui::TICKS_PER_SECOND;
-use crate::ui::renderer::{RectInstance, srgb_to_linear};
+use engine::input::{Action, Edge, InputEvent};
+use dsl::parser::{self, AstKind, AstNode, BinaryOp, Expr, ParseError, ParseResult, Span, UnaryOp};
+use crate::TICKS_PER_SECOND;
+use engine::renderer::{RectInstance, srgb_to_linear};
 
 const SLOT_TIME: usize = 0;
 const SLOT_WIDTH: usize = 1;
@@ -134,6 +134,13 @@ pub struct Runtime {
     state: Option<usize>,
     entered_tick: u64,
     vars: Vec<f32>,
+}
+
+impl Runtime {
+    /// `var` の今の値（宣言順）
+    pub fn vars(&self) -> &[f32] {
+        &self.vars
+    }
 }
 
 /// `Scene::step` で起きたこと。ログ（将来は操作ログ）に使う
@@ -786,7 +793,7 @@ impl Compiler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::Action;
+    use engine::input::Action;
 
     const SIZE: [f32; 2] = [800.0, 600.0];
 
@@ -1012,37 +1019,6 @@ mod tests {
         let rt3 = gone.adopt(Some((&scene, &rt)), 50);
         assert_eq!(state_name(&gone, &rt3), "idle");
         assert_eq!(rt3.entered_tick, 50);
-    }
-
-    /// 同梱のシーンファイルが壊れていないこと、主な操作の流れが想定どおりであること
-    #[test]
-    fn bundled_menu_a_hold_and_direction() {
-        let scene = compile(include_str!("../../ui/menu_a.ui"));
-        let mut rt = scene.adopt(None, 0);
-        // 押してすぐ離すと何も開かない
-        step(&scene, &mut rt, 1, &[press(Action::Menu)]);
-        step(&scene, &mut rt, 2, &[release(Action::Menu)]);
-        assert_eq!(state_name(&scene, &rt), "closed");
-        // 押したまま右 → 画面1
-        step(&scene, &mut rt, 3, &[press(Action::Menu)]);
-        step(&scene, &mut rt, 4, &[press(Action::Right)]);
-        step(&scene, &mut rt, 5, &[release(Action::Menu)]);
-        assert_eq!((state_name(&scene, &rt), rt.vars[0]), ("page", 1.0));
-        step(&scene, &mut rt, 6, &[press(Action::Cancel)]);
-        assert_eq!(state_name(&scene, &rt), "closed");
-    }
-
-    #[test]
-    fn bundled_menu_b_select_and_confirm() {
-        let scene = compile(include_str!("../../ui/menu_b.ui"));
-        let mut rt = scene.adopt(None, 0);
-        step(&scene, &mut rt, 1, &[press(Action::Menu), release(Action::Menu)]);
-        step(&scene, &mut rt, 2, &[press(Action::Up)]); // 0 → 3（折り返し）
-        step(&scene, &mut rt, 3, &[press(Action::Up), press(Action::Confirm)]);
-        assert_eq!(state_name(&scene, &rt), "page");
-        assert_eq!(rt.vars, vec![2.0, 2.0]); // cursor, screen
-        step(&scene, &mut rt, 4, &[press(Action::Cancel)]);
-        assert_eq!(state_name(&scene, &rt), "open");
     }
 
     #[test]
