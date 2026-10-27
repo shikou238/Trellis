@@ -1,6 +1,9 @@
 mod app;
 mod appview;
 mod window;
+pub mod product;
+mod demo3d;
+mod menu;
 mod vertex;
 mod texture;
 mod shader;
@@ -11,12 +14,6 @@ pub mod parser;
 mod assets;
 mod input;
 mod ui;
-
-use std::sync::Arc;
-
-use winit::{
-    application::ApplicationHandler, event::*, event_loop::{ActiveEventLoop, EventLoop}, keyboard::{KeyCode, PhysicalKey}, window::Window
-};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -35,14 +32,7 @@ pub fn run() -> anyhow::Result<()> {
         console_log::init_with_level(log::Level::Info).unwrap();
     }
 
-    let event_loop = EventLoop::with_user_event().build()?;
-    let mut app = app::App::new(
-        #[cfg(target_arch = "wasm32")]
-        &event_loop,
-    );
-    event_loop.run_app(&mut app)?;
-
-    Ok(())
+    app::run(menu::window_specs(), menu::MenuProto::new)
 }
 
 #[cfg(target_arch = "wasm32")]
