@@ -1,7 +1,7 @@
 # UI シーン DSL リファレンス
 
-`ui/*.ui`（シーン）の書き方の一覧。実装は `src/parser.rs`（構文）と `src/ui/scene.rs`（意味）。
-計測の設定ファイル `ui/tasks.ui` の書き方は最後の節。
+`ui/*.ui`（シーン）の書き方の一覧。実装は `crates/dsl/src/parser.rs`（構文）と `crates/uikit/src/scene.rs`（意味）。
+計測の設定ファイル（menu-proto の `ui/tasks.ui`）の書き方は最後の節。
 
 ---
 
@@ -116,7 +116,7 @@
 | `(release 操作)` | 操作のボタンが離された |
 | `(after 秒)` | この状態に入ってから指定秒数たった（`goto` 必須） |
 
-操作の名前: `menu` `up` `down` `left` `right` `confirm` `cancel`（キー配置は DESIGN.md §8）
+操作の名前: `menu` `up` `down` `left` `right` `confirm` `cancel`（キー配置は [menu-proto/DESIGN.md](../menu-proto/DESIGN.md) §4）
 
 | 節 | 意味 |
 |---|---|

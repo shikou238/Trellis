@@ -109,7 +109,7 @@ impl ScenePlayer {
         }
     }
 
-    /// 1 tick 進める。計測（`session.rs`）は自分の時計でこれを呼び、起きたことを `report` で受け取る
+    /// 1 tick 進める。計測のように自分の時計で動かす製品（menu-proto の `session.rs`）はこれを呼び、起きたことを `report` で受け取る
     pub fn step_tick(&mut self, inputs: &[InputEvent], logical_size: [f32; 2], report: &mut dyn FnMut(StepEvent)) {
         self.tick += 1;
         if let Some(scene) = &self.scene {
@@ -183,7 +183,7 @@ impl ScenePlayer {
     }
 }
 
-/// 普段の操作ではログに出すだけ。計測中の記録は `session.rs` が行う
+/// 普段の操作ではログに出すだけ。記録したい製品は `step_tick` にコールバックを渡す
 fn log_step_event(path: &str, tick: u64, event: StepEvent) {
     match event {
         StepEvent::Transition { from, to, label } => {
