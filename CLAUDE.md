@@ -1,6 +1,6 @@
 # trellis
 
-Rust + wgpu + winit による描画基盤と、ホットリロード可能な独自DSL。**ゲーム本体（`../arcanology`、PLAN.md §10）と作曲ソフト（§8、後回し）が別リポジトリからパス指定で参照する共有の基盤**（PLAN.md §9）。
+Rust + wgpu + winit による描画基盤と、ホットリロード可能な独自DSL。**ゲーム本体（`../arcanology`、PLAN.md §10）と作曲ソフト（`../herbarium`、PLAN.md §8）が別リポジトリからパス指定で参照する共有の基盤**（PLAN.md §9）。
 長期的にはシミュレーション系・対人系ゲームの基盤にする。機能は製品で実際に必要になったときだけ足す。
 
 ## 地図（Cargo workspace、矢印は依存の向き）
