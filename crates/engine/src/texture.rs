@@ -1,4 +1,45 @@
+use anyhow::Context;
+use image::AnimationDecoder;
+use wgpu::util::DeviceExt;
+
 use crate::assets;
+
+/// 読み込んだ絵。`rgba` は 1 画素 4 バイトで、上の行から並ぶ
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// GIF の 1 フレーム。前のフレームに重ね合わせた後の完成した絵
+pub struct GifFrame {
+    pub image: Image,
+    /// 表示時間（1/100 秒単位。GIF の書き方と同じ）
+    pub delay: u32,
+}
+
+/// PNG・JPEG・GIF（最初のフレーム）を読む
+pub fn load_image(path: &str) -> anyhow::Result<Image> {
+    let bytes = assets::read_bytes(path)?;
+    let rgba = image::load_from_memory(&bytes).with_context(|| format!("failed to decode {}", path))?.to_rgba8();
+    Ok(Image { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() })
+}
+
+/// GIF のすべてのフレームを読む。フレームが前との差分でも、重ね合わせた後の絵を返す
+pub fn load_gif(path: &str) -> anyhow::Result<Vec<GifFrame>> {
+    let bytes = assets::read_bytes(path)?;
+    let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(bytes)).with_context(|| format!("failed to decode {}", path))?;
+    decoder
+        .into_frames()
+        .map(|frame| {
+            let frame = frame.with_context(|| format!("failed to decode a frame of {}", path))?;
+            let (numer, denom) = frame.delay().numer_denom_ms();
+            let delay = (numer as f64 / denom as f64 / 10.0).round() as u32;
+            let rgba = frame.into_buffer();
+            Ok(GifFrame { image: Image { width: rgba.width(), height: rgba.height(), rgba: rgba.into_raw() }, delay })
+        })
+        .collect()
+}
 
 pub struct TextureWrapper {
     pub texture: wgpu::Texture,
@@ -9,82 +50,58 @@ pub struct TextureWrapper {
 impl TextureWrapper {
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float; // 1.
 
-    pub fn new (path: &str, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    /// 絵のファイルを読んでテクスチャにする。`filter` は拡大・縮小のしかた（ドット絵なら `Nearest`）
+    pub fn new(path: &str, filter: wgpu::FilterMode, device: &wgpu::Device, queue: &wgpu::Queue) -> anyhow::Result<Self> {
+        let image = load_image(path)?;
+        Ok(Self::from_image(&image, filter, path, device, queue))
+    }
 
-        let diffuse_bytes = assets::read_bytes(path).expect("Failed to read texture file");
-        let diffuse_image = image::load_from_memory(&diffuse_bytes).unwrap();
-        let diffuse_rgba = diffuse_image.to_rgba8();
+    pub fn from_image(image: &Image, filter: wgpu::FilterMode, label: &str, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        Self::create(image.width, image.height, 1, wgpu::TextureViewDimension::D2, &image.rgba, filter, label, device, queue)
+    }
 
-        use image::GenericImageView;
-        let dimensions = diffuse_image.dimensions();
+    /// 同じ大きさの絵を層にしたテクスチャ配列（ビューは 1 層でも `D2Array`）。アニメーションのフレームを層にすると、
+    /// インスタンスごとに何層目かを渡すだけで、全員を別々のフレームで 1 回のインスタンシングで描ける
+    pub fn from_layers(layers: &[Image], filter: wgpu::FilterMode, label: &str, device: &wgpu::Device, queue: &wgpu::Queue) -> anyhow::Result<Self> {
+        let first = layers.first().with_context(|| format!("{}: no layers", label))?;
+        let (width, height) = (first.width, first.height);
+        if let Some((i, layer)) = layers.iter().enumerate().find(|(_, l)| (l.width, l.height) != (width, height)) {
+            anyhow::bail!("{}: layer {} is {}x{}, expected {}x{}", label, i, layer.width, layer.height, width, height);
+        }
+        let rgba: Vec<u8> = layers.iter().flat_map(|l| l.rgba.iter().copied()).collect();
+        Ok(Self::create(width, height, layers.len() as u32, wgpu::TextureViewDimension::D2Array, &rgba, filter, label, device, queue))
+    }
 
-        let texture_size = wgpu::Extent3d {
-            width: dimensions.0,
-            height: dimensions.1,
-            // All textures are stored as 3D, we represent our 2D texture
-            // by setting depth to 1.
-            depth_or_array_layers: 1,
-        };
-        let diffuse_texture = device.create_texture(
+    #[allow(clippy::too_many_arguments)]
+    fn create(width: u32, height: u32, layers: u32, dimension: wgpu::TextureViewDimension, rgba: &[u8], filter: wgpu::FilterMode, label: &str, device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+        let texture = device.create_texture_with_data(
+            queue,
             &wgpu::TextureDescriptor {
-                size: texture_size,
-                mip_level_count: 1, // We'll talk about this a little later
+                label: Some(label),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: layers },
+                mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 // Most images are stored using sRGB, so we need to reflect that here.
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                // TEXTURE_BINDING tells wgpu that we want to use this texture in shaders
-                // COPY_DST means that we want to copy data to this texture
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                label: Some("diffuse_texture"),
-                // This is the same as with the SurfaceConfig. It
-                // specifies what texture formats can be used to
-                // create TextureViews for this texture. The base
-                // texture format (Rgba8UnormSrgb in this case) is
-                // always supported. Note that using a different
-                // texture format is not supported on the WebGL2
-                // backend.
                 view_formats: &[],
-            }
-        );
-
-        queue.write_texture(
-            // Tells wgpu where to copy the pixel data
-            wgpu::TexelCopyTextureInfo {
-                texture: &diffuse_texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
             },
-            // The actual pixel data
-            &diffuse_rgba,
-            // The layout of the texture
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4 * dimensions.0),
-                rows_per_image: Some(dimensions.1),
-            },
-            texture_size,
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
         );
-
-        // We don't need to configure the texture view much, so let's
-        // let wgpu define it.
-        let diffuse_texture_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let view = texture.create_view(&wgpu::TextureViewDescriptor { dimension: Some(dimension), ..Default::default() });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some(label),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Nearest,
+            mag_filter: filter,
+            min_filter: filter,
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
-
-        Self {
-            texture: diffuse_texture,
-            view: diffuse_texture_view,
-            sampler: diffuse_sampler,
-        }
+        Self { texture, view, sampler }
     }
      pub fn create_depth_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, label: &str) -> Self {
         let size = wgpu::Extent3d { // 2.
@@ -122,5 +139,38 @@ impl TextureWrapper {
         );
 
         Self { texture, view, sampler }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Delay, Frame, RgbaImage, codecs::gif::GifEncoder};
+
+    #[test]
+    fn gif_frames_keep_pixels_and_delay() {
+        let path = std::env::temp_dir().join(format!("engine-test-{}.gif", std::process::id()));
+        {
+            let file = std::fs::File::create(&path).unwrap();
+            let mut encoder = GifEncoder::new(file);
+            let red = RgbaImage::from_pixel(2, 3, image::Rgba([255, 0, 0, 255]));
+            let blue = RgbaImage::from_pixel(2, 3, image::Rgba([0, 0, 255, 255]));
+            encoder.encode_frame(Frame::from_parts(red, 0, 0, Delay::from_numer_denom_ms(100, 1))).unwrap();
+            encoder.encode_frame(Frame::from_parts(blue, 0, 0, Delay::from_numer_denom_ms(250, 1))).unwrap();
+        }
+        let frames = load_gif(path.to_str().unwrap()).unwrap();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(frames.len(), 2);
+        assert_eq!((frames[0].image.width, frames[0].image.height), (2, 3));
+        assert_eq!(frames[0].image.rgba.len(), 2 * 3 * 4);
+        assert_eq!(&frames[0].image.rgba[..4], &[255, 0, 0, 255]);
+        assert_eq!(&frames[1].image.rgba[..4], &[0, 0, 255, 255]);
+        assert_eq!((frames[0].delay, frames[1].delay), (10, 25));
+    }
+
+    #[test]
+    fn missing_image_is_an_error() {
+        assert!(load_image("no/such/file.png").is_err());
+        assert!(load_gif("no/such/file.gif").is_err());
     }
 }

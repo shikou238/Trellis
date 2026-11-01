@@ -49,7 +49,7 @@ impl Demo3d {
         };
         let model_buffer = Self::load_model_and_create_buffer(device)?;
 
-        let diffuse_texture = TextureWrapper::new(TEXTURE_PATH, device, &gpu.queue);
+        let diffuse_texture = TextureWrapper::new(TEXTURE_PATH, wgpu::FilterMode::Linear, device, &gpu.queue)?;
         let diffuse_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: shader.get_texture_bind_group_layout(),
             entries: &[

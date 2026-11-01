@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use winit::{keyboard::KeyCode, window::Window};
 
@@ -20,6 +21,10 @@ pub struct WindowWrapper{
     pub ui_layer: UiLayer,
     pub text_layer: TextLayer,
     input: InputMapper,
+    /// 押されている物理キー。フォーカスを失ったときに離すため
+    pressed_keys: Vec<KeyCode>,
+    /// 前のフレームの `update` の時刻。`Frame::dt` に使う
+    last_update: Option<Instant>,
     /// 背景色（線形 RGBA）。None ならカーソル位置の色
     pub background: Option<[f32; 4]>,
 }
@@ -55,6 +60,8 @@ impl WindowWrapper {
             ui_layer: UiLayer::new(&gpu.device, ui_renderer),
             text_layer: TextLayer::new(&gpu.device, &gpu.queue, text_system),
             input: InputMapper::default(),
+            pressed_keys: Vec::new(),
+            last_update: None,
             background: None,
         }
     }
@@ -73,6 +80,13 @@ impl WindowWrapper {
     /// キーを製品に渡し、抽象的な操作にしたものも渡す
     pub fn handle_key(&mut self, product: &mut dyn Product, code: KeyCode, is_pressed: bool, repeat: bool) {
         let id = self.nature.id();
+        if is_pressed {
+            if !self.pressed_keys.contains(&code) {
+                self.pressed_keys.push(code);
+            }
+        } else {
+            self.pressed_keys.retain(|&k| k != code);
+        }
         product.key(id, code, is_pressed, repeat);
 
         let mut inputs: Vec<InputEvent> = Vec::new();
@@ -83,10 +97,14 @@ impl WindowWrapper {
     }
     /// フォーカスを失うとキーの解放が届かないので、押されているものをすべて離す
     pub fn focus_lost(&mut self, product: &mut dyn Product) {
+        let id = self.nature.id();
+        for code in std::mem::take(&mut self.pressed_keys) {
+            product.key(id, code, false, false);
+        }
         let mut inputs = Vec::new();
         self.input.release_all(&mut inputs);
         if !inputs.is_empty() {
-            product.inputs(self.nature.id(), &inputs);
+            product.inputs(id, &inputs);
         }
     }
     pub fn scale_factor(&self) -> f32 {
@@ -104,11 +122,16 @@ impl WindowWrapper {
     /// 製品にこのウィンドウの中身（矩形・文字・背景色）を作らせて GPU に送る
     pub fn update(&mut self, gpu: &Gpu, text_system: &mut TextSystem, product: &mut dyn Product) {
         let logical_size = self.logical_size();
+        // wasm では Instant がパニックする（DESIGN.md §7 の #4）。移植のときはここを直す
+        let now = Instant::now();
+        let dt = self.last_update.map_or(Duration::ZERO, |last| now - last);
+        self.last_update = Some(now);
         self.ui_layer.instances.clear();
         self.text_layer.labels.clear();
         let mut frame = Frame {
             window: self.nature.id(),
             logical_size,
+            dt,
             rects: &mut self.ui_layer.instances,
             labels: &mut self.text_layer.labels,
             background: None,

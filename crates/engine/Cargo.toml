@@ -16,7 +16,7 @@ glyphon = "0.10.0"
 [dependencies.image]
 version = "0.24"
 default-features = false
-features = ["png", "jpeg"]
+features = ["png", "jpeg", "gif"]
 
 [dev-dependencies]
 # examples/demo3d（learn-wgpu チュートリアル由来の 3D の見本）だけが使う

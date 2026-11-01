@@ -25,7 +25,8 @@ use env_logger::Env;
 pub fn run<P: Product>(windows: Vec<WindowSpec>, make_product: impl FnOnce(&Gpu, &[WindowId]) -> anyhow::Result<P> + 'static) -> anyhow::Result<()> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        env_logger::init_from_env(Env::new().default_filter_or("debug"));
+        // debug にすると wgpu のログが起動のたびに数千行出る。細かく見たいときは RUST_LOG で指定する
+        env_logger::init_from_env(Env::new().default_filter_or("info"));
     }
     #[cfg(target_arch = "wasm32")]
     {

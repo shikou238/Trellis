@@ -1,6 +1,8 @@
 //! エンジンと製品（メニュー試作、ゲーム、作曲ソフト）の境界。
 //! エンジンはウィンドウ・GPU・入力・矩形と文字の描画を持ち、製品の中身は `Product` 越しにだけ呼ぶ。
 
+use std::time::Duration;
+
 use winit::{keyboard::KeyCode, window::WindowId};
 
 use crate::input::InputEvent;
@@ -25,6 +27,8 @@ pub struct WindowSpec {
 pub struct Frame<'a> {
     pub window: WindowId,
     pub logical_size: [f32; 2],
+    /// このウィンドウの前のフレームからの経過時間。最初のフレームは 0。ウィンドウが複数あると、それぞれのウィンドウで呼ばれる
+    pub dt: Duration,
     pub rects: &'a mut Vec<RectInstance>,
     pub labels: &'a mut Vec<Label>,
     /// 線形 RGBA。None ならカーソル位置の色
@@ -50,7 +54,8 @@ pub enum PointerKind {
 
 /// 製品側が実装する。エンジンはイベントとフレームのたびにこれを呼ぶ
 pub trait Product: 'static {
-    /// 物理キー（Esc はエンジンが終了に使う。R はエンジンが自分のシェーダを読み直したあと `reload` を呼ぶ）
+    /// 物理キー（Esc はエンジンが終了に使う。R はエンジンが自分のシェーダを読み直したあと `reload` を呼ぶ）。
+    /// フォーカスを失ったときは、押されているキーをすべて `pressed = false` で離す
     fn key(&mut self, _window: WindowId, _code: KeyCode, _pressed: bool, _repeat: bool) {}
     /// キーを抽象的な操作にしたもの。フォーカスを失ったときの一斉解放もここに来る
     fn inputs(&mut self, _window: WindowId, _inputs: &[InputEvent]) {}

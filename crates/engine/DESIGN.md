@@ -31,7 +31,7 @@ examples/demo3d/  learn-wgpu チュートリアル由来の 3D の見本（§6�
 | GPUへのバイト変換 | `bytemuck` | `Pod`/`Zeroable` derive |
 | 画像 | `image 0.24`（png/jpeg のみ） | |
 | 文字描画 | `glyphon 0.10`（内部で cosmic-text 0.15） | wgpu 28 を共有（Cargo.lock 上 wgpu は1バージョンのみ） |
-| エラー / ログ | `anyhow` / `env_logger`（native, 既定 `debug`）・`console_log`（wasm） | |
+| エラー / ログ | `anyhow` / `env_logger`（native, 既定 `info`。`RUST_LOG` で変える）・`console_log`（wasm） | |
 | 非同期の待ち | `pollster` | 起動時の adapter/device 取得と、wgpu のエラースコープの回収 |
 | 見本だけ（dev-dependencies） | `cgmath 0.18`、`serde` + `serde-lexpr`/`lexpr`（`=` で固定） | `examples/demo3d` |
 
@@ -47,11 +47,11 @@ engine::run(windows: Vec<WindowSpec>, make_product: impl FnOnce(&Gpu, &[WindowId
 
 | メソッド | 呼ばれるとき |
 |---|---|
-| `key(window, code, pressed, repeat)` | 物理キー。Esc はエンジンが終了に使う（製品にも届く） |
+| `key(window, code, pressed, repeat)` | 物理キー。Esc はエンジンが終了に使う（製品にも届く）。フォーカスを失ったときは、押されているキーを `pressed = false` で離す |
 | `inputs(window, &[InputEvent])` | キーを `Action` にしたもの。フォーカスを失ったときの一斉解放もここ |
 | `pointer(Pointer)` | カーソル移動と左ボタンの押下・解放（論理ピクセル、ウィンドウの論理サイズ付き） |
 | `reload(gpu)` | `R` キー。エンジンが UI シェーダを読み直したあと |
-| `update(gpu, &mut Frame)` | 毎フレーム描画の前。`frame.rects` / `frame.labels`（毎フレーム空から）を詰め、`frame.background` を決める |
+| `update(gpu, &mut Frame)` | 毎フレーム描画の前。`frame.rects` / `frame.labels`（毎フレーム空から）を詰め、`frame.background` を決める。`frame.dt` はこのウィンドウの前のフレームからの経過時間（最初は 0）。製品は `Instant` を使わずこれで時間を進める |
 | `render(window, &mut RenderPass)` | 製品自身の描画（3D など）。このあとエンジンが矩形と文字を上に重ねる |
 | `window_closed(window) -> bool` | ウィンドウが閉じられた。true で終了（ウィンドウが 0 になっても終了） |
 
@@ -158,6 +158,8 @@ render(gpu, ui_renderer, product)
 
 - 読み書きはすべて `assets.rs` を通す（将来は同梱素材・ネットワークに差し替え）。パスはカレントディレクトリ相対。製品は起動時に自分のクレートのディレクトリへ `set_current_dir` している。
 - エンジン自身が読むのは `ui.wgsl` だけで、製品のリポジトリから動かしても見つかるように `CARGO_MANIFEST_DIR` から引く（`renderer.rs` の `SHADER_PATH`）。`R` で読み直す。
+- 素材の変更検知: `assets::Watch::new(&[パス…])` を作り、毎フレーム `changed()` を呼ぶと、更新日時が変わったファイルが返る（見に行くのは 200ms ごと）。
+- 絵（`texture.rs`）: `load_image` は PNG・JPEG・GIF の最初のフレーム、`load_gif` は GIF の全フレーム（重ね合わせた後の完成した絵と、1/100 秒単位の表示時間）。どちらも失敗したら `Err`。`TextureWrapper::new(path, filter, ..)` / `from_image` は 1 枚、`from_layers` は同じ大きさの絵を層にしたテクスチャ配列（ビューは `D2Array`）。`filter` はドット絵なら `Nearest`。
 - **失敗しても落ちない**: `shader::capture_validation()` が wgpu のエラースコープで検証エラーを捕まえ、パニックではなく `Err` にする。失敗したら差し替えない（`UiRenderer::build_pipeline` 全体を包んでいる）。
 
 ## 6. 見本: `examples/demo3d`（learn-wgpu チュートリアル由来）
@@ -189,9 +191,8 @@ render(gpu, ui_renderer, product)
 | 1 | windows[0] に surface を2回作成（adapter 選択用に1つ、WindowWrapper で1つ）。前者は捨てられる | `AppView::new`, `WindowWrapper::new` | 冗長だが動作する |
 | 2 | surface の configure は `Resized` イベント待ち。来なければ描画されない | `WindowWrapper::resize`, `render` | チュートリアル準拠 |
 | 3 | パイプラインは windows[0] の surface format で作られ全ウィンドウ共用（`Gpu::surface_format`） | `AppView::new` | 前提として許容 |
-| 4 | **wasm は動かない**: `std::fs` でファイルを読む（`assets.rs`）、`std::time::Instant` が wasm32 ではパニックする（uikit）、`capture_validation` の `pollster::block_on` は WebGPU バックエンドでは待てない可能性がある、`run.html` の import 先が実際の出力と違う、wasm のエントリ（`#[wasm_bindgen(start)]`）は分割のときに消えたので製品側に作り直す必要がある。さらに WebGL では canvas をまたいで device を共有できない（PLAN.md §6） | 各所 | 移植時にまとめて対応 |
+| 4 | **wasm は動かない**: `std::fs` でファイルを読む（`assets.rs`）、`std::time::Instant` が wasm32 ではパニックする（uikit、`window.rs` の `Frame::dt`、`assets::Watch`）、`capture_validation` の `pollster::block_on` は WebGPU バックエンドでは待てない可能性がある、`run.html` の import 先が実際の出力と違う、wasm のエントリ（`#[wasm_bindgen(start)]`）は分割のときに消えたので製品側に作り直す必要がある。さらに WebGL では canvas をまたいで device を共有できない（PLAN.md §6） | 各所 | 移植時にまとめて対応 |
 | 5 | `R` キーで壊れた WGSL を読んだときに落ちないことは、コード上は対処済みだが手動では未確認 | `shader::capture_validation` | 要確認 |
-| 6 | `TextureWrapper::new` は失敗時に `expect`/`unwrap` でパニック（他は anyhow） | `texture.rs` | エラー処理が不統一 |
 | 7 | 押せるのは左ボタンだけ（`PointerKind`）。タッチは未対応 | `app.rs` | 必要になったら足す |
 | 8 | `Action`（`menu` `up` … `cancel`）とキー配置はメニュー試作の都合で決めたもの | `input.rs` | ゲームで要るものが分かったら見直す |
 
