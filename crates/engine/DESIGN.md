@@ -159,7 +159,7 @@ render(gpu, ui_renderer, product)
 - 読み書きはすべて `assets.rs` を通す（将来は同梱素材・ネットワークに差し替え）。パスはカレントディレクトリ相対。製品は起動時に自分のクレートのディレクトリへ `set_current_dir` している。
 - エンジン自身が読むのは `ui.wgsl` だけで、製品のリポジトリから動かしても見つかるように `CARGO_MANIFEST_DIR` から引く（`renderer.rs` の `SHADER_PATH`）。`R` で読み直す。
 - 素材の変更検知: `assets::Watch::new(&[パス…])` を作り、毎フレーム `changed()` を呼ぶと、更新日時が変わったファイルが返る（見に行くのは 200ms ごと）。
-- 絵（`texture.rs`）: `load_image` は PNG・JPEG・GIF の最初のフレーム、`load_gif` は GIF の全フレーム（重ね合わせた後の完成した絵と、1/100 秒単位の表示時間）。どちらも失敗したら `Err`。`TextureWrapper::new(path, filter, ..)` / `from_image` は 1 枚、`from_layers` は同じ大きさの絵を層にしたテクスチャ配列（ビューは `D2Array`）。`filter` はドット絵なら `Nearest`。
+- 絵（`texture.rs`）: `load_image` は PNG・JPEG・GIF の最初のフレーム、`load_gif` は GIF の全フレーム（重ね合わせた後の完成した絵と、1/100 秒単位の表示時間）。`Image::crop(x, y, w, h)` は 1 コマを切り出し、`Image::grid(cols, rows)` は 1 枚絵（スプライトシート）を同じ大きさのコマに左上から行ごとの順で切り分ける（はみ出し・割り切れなければ `Err`）。どちらも失敗したら `Err`。`TextureWrapper::new(path, filter, ..)` / `from_image` は 1 枚、`from_layers` は同じ大きさの絵を層にしたテクスチャ配列（ビューは `D2Array`）。`filter` はドット絵なら `Nearest`。
 - **失敗しても落ちない**: `shader::capture_validation()` が wgpu のエラースコープで検証エラーを捕まえ、パニックではなく `Err` にする。失敗したら差し替えない（`UiRenderer::build_pipeline` 全体を包んでいる）。
 
 ## 6. 見本: `examples/demo3d`（learn-wgpu チュートリアル由来）
